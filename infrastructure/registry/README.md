@@ -25,8 +25,8 @@ terraform output registry_endpoint
 Use the printed prefix when tagging images, for example:
 
 ```bash
-docker tag cat-id:latest "$(terraform output -raw registry_endpoint)/cat-id:v1.0.0"
-docker push "$(terraform output -raw registry_endpoint)/cat-id:v1.0.0"
+docker tag cat-id:latest "$(terraform output -raw registry_endpoint)/app:v1.0.0"
+docker push "$(terraform output -raw registry_endpoint)/app:v1.0.0"
 ```
 
 ## Related

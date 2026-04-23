@@ -1,6 +1,6 @@
 output "registry_endpoint" {
   value       = "rg.${var.scw_region}.scw.cloud/${scaleway_registry_namespace.cat_id.name}"
-  description = "Image prefix for docker push/pull (e.g. rg.fr-par.scw.cloud/cat-id/cat-id:v1.0.0)."
+  description = "Image prefix for docker push/pull (e.g. rg.fr-par.scw.cloud/cat-id/app:v1.0.0)."
 }
 
 output "namespace_id" {

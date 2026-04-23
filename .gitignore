@@ -50,3 +50,6 @@ infrastructure/registry/terraform.tfvars
 
 # Generated DNS apply configs (local)
 infrastructure/dns/dns_records.generated.json
+
+# Scaleway registry push script (copy from scw-registry.env.example)
+scripts/scw-registry.local.env

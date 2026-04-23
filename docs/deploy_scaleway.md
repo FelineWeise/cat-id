@@ -70,8 +70,15 @@ Build, tag, push (example):
 
 ```bash
 docker build -t cat-id:release .
-docker tag cat-id:release rg.fr-par.scw.cloud/cat-id/cat-id:v1.0.0
-docker push rg.fr-par.scw.cloud/cat-id/cat-id:v1.0.0
+docker tag cat-id:release rg.fr-par.scw.cloud/cat-id/app:v1.0.0
+docker push rg.fr-par.scw.cloud/cat-id/app:v1.0.0
+```
+
+**One-shot script (local):** copy [`scripts/scw-registry.env.example`](../scripts/scw-registry.env.example) to **`scripts/scw-registry.local.env`** (gitignored), set `SCW_SECRET_KEY`, then:
+
+```bash
+chmod +x scripts/push_to_scaleway_registry.sh
+./scripts/push_to_scaleway_registry.sh v1.0.0
 ```
 
 **Option B — reuse LAED’s namespace:** push as `rg.<region>.scw.cloud/<laed-namespace>/cat-id:<tag>` and set `CAT_ID_IMAGE` accordingly—**no** `infrastructure/registry/` apply.
@@ -86,7 +93,7 @@ Pin **tags or digests** for production; avoid relying only on `:latest`.
 4. From that directory:
 
 ```bash
-export CAT_ID_IMAGE=rg.fr-par.scw.cloud/cat-id/cat-id:v1.0.0
+export CAT_ID_IMAGE=rg.fr-par.scw.cloud/cat-id/app:v1.0.0
 docker compose pull
 docker compose up -d
 ```

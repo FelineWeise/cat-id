@@ -195,7 +195,7 @@ git remote set-url origin https://github.com/FelineWeise/cat-id.git
 ```bash
 ssh <user>@<laed-base-ip>
 cd /opt/cat-id-data
-export CAT_ID_IMAGE=rg.fr-par.scw.cloud/cat-id/cat-id:v1.0.0
+export CAT_ID_IMAGE=rg.fr-par.scw.cloud/cat-id/app:v1.0.0
 docker compose pull
 docker compose up -d
 ```
