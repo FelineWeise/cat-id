@@ -98,7 +98,7 @@ docker compose pull
 docker compose up -d
 ```
 
-**TLS / Caddy:** By default the deploy compose runs **only the app** on **`127.0.0.1:18008`**. Point **LAED’s** Caddy at that address for `app.cat-id.eu` (see [`infrastructure/deploy/README.md`](../infrastructure/deploy/README.md)). Use **`docker compose --profile standalone-tls up -d`** only on a host where **80/443** are free. Images must be **linux/amd64** for typical Scaleway VMs (`./scripts/push_to_scaleway_registry.sh` builds accordingly).
+**TLS / Caddy:** By default the deploy compose runs **only the app** on host port **`18008`**. **LAED’s** Caddy runs in Docker — use **`host.docker.internal:18008`** (and `extra_hosts` on LAED’s `caddy` service). See [`infrastructure/deploy/README.md`](../infrastructure/deploy/README.md). Use **`docker compose --profile standalone-tls up -d`** only when **80/443** are free on that host. Images must be **linux/amd64** (`./scripts/push_to_scaleway_registry.sh`).
 
 ## 5) Spotify env (non-secret preview)
 

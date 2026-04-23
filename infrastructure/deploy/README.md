@@ -32,12 +32,19 @@ This folder is the **runtime contract** for cat-id on the **LAED base VM**: Comp
    docker compose up -d
    ```
 
-   **Default layout (LAED shares the host):** only the **app** container runs. It listens on **`127.0.0.1:18008`** → **`8000`** inside the container. Add this site (or equivalent) to **LAED’s** Caddy config, then reload LAED Caddy:
+   **Default layout (LAED shares the host):** only the **app** container runs on host port **`18008`**. LAED’s Caddy runs **inside Docker**, so it must **not** use `127.0.0.1` on the host (that is unreachable from other containers). Use **`host.docker.internal`** after wiring it on the **LAED** `caddy` service:
+
+   ```yaml
+   extra_hosts:
+     - "host.docker.internal:host-gateway"
+   ```
+
+   Then add this site to **LAED’s** `Caddyfile` and reload Caddy:
 
    ```caddyfile
    app.cat-id.eu {
      encode zstd gzip
-     reverse_proxy 127.0.0.1:18008
+     reverse_proxy host.docker.internal:18008
    }
    ```
 
@@ -65,7 +72,7 @@ Scaleway **GP/General** instances are **amd64**. Build and push from a Mac with:
 
 ## Ports and Caddy
 
-- **Shared LAED host:** do **not** use the bundled Caddy (profile `standalone-tls` off). Proxy from **LAED** to **`127.0.0.1:18008`**.
+- **Shared LAED host:** do **not** use the bundled Caddy (profile `standalone-tls` off). Proxy from **LAED** to **`host.docker.internal:18008`** (with `extra_hosts` on LAED’s `caddy` service).
 - **Dedicated host:** `docker compose --profile standalone-tls up -d` to use **80/443** here.
 
 ## Isolation on a shared host

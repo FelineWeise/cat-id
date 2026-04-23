@@ -1,5 +1,5 @@
 # Production on LAED base host: image-only (Scaleway Container Registry). No build: here.
-# Default: app only, bound to loopback for LAED's Caddy (80/443 already in use).
+# Default: app only on host port 18008 (LAED's Caddy in Docker uses host.docker.internal:18008).
 #   docker compose up -d
 # Optional second Caddy on this host (empty VPS / free 80+443):
 #   docker compose --profile standalone-tls up -d
@@ -15,7 +15,9 @@ services:
     env_file:
       - ./production.env
     ports:
-      - "127.0.0.1:18008:8000"
+      # Published on all host interfaces so LAED's Caddy container can reach host:18008
+      # via host.docker.internal (see deploy README — add extra_hosts on LAED caddy).
+      - "18008:8000"
     expose:
       - "8000"
     networks:
