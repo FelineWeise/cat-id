@@ -19,11 +19,14 @@ def _bool_env(name: str, default: bool) -> bool:
 
 
 APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
-APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8000").strip()
-SPOTIFY_REDIRECT_URI = os.getenv(
-    "SPOTIFY_REDIRECT_URI",
-    f"{APP_BASE_URL.rstrip('/')}/api/spotify/callback",
-).strip()
+APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8000").strip().rstrip("/")
+SPOTIFY_REDIRECT_DERIVED_FROM_APP_BASE = f"{APP_BASE_URL}/api/spotify/callback"
+_explicit_redirect = os.getenv("SPOTIFY_REDIRECT_URI", "").strip()
+SPOTIFY_REDIRECT_URI = (
+    _explicit_redirect.rstrip("/")
+    if _explicit_redirect
+    else SPOTIFY_REDIRECT_DERIVED_FROM_APP_BASE
+)
 
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "").strip()

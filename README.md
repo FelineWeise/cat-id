@@ -105,8 +105,10 @@ Set production env vars:
 - `ENABLE_DEBUG_ENDPOINT=false`
 - `ALLOWED_ORIGINS=https://app.cat-id.eu`
 
-In Spotify Developer Dashboard, add:
+In Spotify Developer Dashboard, add **exactly** (same scheme, host, path; no trailing slash unless you also set one in env):
 - `https://app.cat-id.eu/api/spotify/callback`
+
+The redirect URI must be registered on the **same** Spotify app as `SPOTIFY_CLIENT_ID`. After deploy, confirm what the server sends to Spotify: `curl -sS https://app.cat-id.eu/api/spotify/oauth-config`.
 
 ### DNS and deploy runbook
 

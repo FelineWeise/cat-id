@@ -17,6 +17,8 @@ from backend.config import (
     APP_BASE_URL,
     APP_ENV,
     ENABLE_DEBUG_ENDPOINT,
+    SPOTIFY_CLIENT_ID,
+    SPOTIFY_REDIRECT_DERIVED_FROM_APP_BASE,
     SPOTIFY_REDIRECT_URI,
 )
 from backend.lastfm import fetch_track_tags, get_similar_tracks, get_track_tags
@@ -64,6 +66,12 @@ async def startup_checks() -> None:
     logger.info("App base URL: %s", APP_BASE_URL)
     logger.info("Allowed origins: %s", ALLOWED_ORIGINS)
     logger.info("Spotify redirect URI: %s", SPOTIFY_REDIRECT_URI)
+    if SPOTIFY_REDIRECT_URI != SPOTIFY_REDIRECT_DERIVED_FROM_APP_BASE:
+        logger.warning(
+            "SPOTIFY_REDIRECT_URI differs from APP_BASE_URL default (%s). "
+            "Ensure Spotify Developer Dashboard lists the redirect URI exactly (scheme, host, path, no stray slash).",
+            SPOTIFY_REDIRECT_DERIVED_FROM_APP_BASE,
+        )
     if not SPOTIFY_REDIRECT_URI.startswith("https://"):
         logger.warning(
             "SPOTIFY_REDIRECT_URI is not HTTPS. Spotify may reject authorize requests "
@@ -319,6 +327,17 @@ if ENABLE_DEBUG_ENDPOINT:
 # In-memory token store keyed by a simple session id (cookie).
 # For production, use a proper session backend.
 _token_store: dict[str, dict] = {}
+
+
+@app.get("/api/spotify/oauth-config")
+def spotify_oauth_config():
+    """Public values the app sends to Spotify OAuth (for debugging redirect_uri mismatch)."""
+    return {
+        "app_base_url": APP_BASE_URL,
+        "redirect_uri": SPOTIFY_REDIRECT_URI,
+        "redirect_uri_derived_from_app_base": SPOTIFY_REDIRECT_DERIVED_FROM_APP_BASE,
+        "spotify_client_id": SPOTIFY_CLIENT_ID,
+    }
 
 
 @app.get("/api/spotify/login")
