@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars (gitignored) and adjust if needed.
+# Credentials: SCW_ACCESS_KEY, SCW_SECRET_KEY, SCW_DEFAULT_PROJECT_ID (recommended).
+
+# scw_region     = "fr-par"
+# namespace_name = "cat-id"
+# is_public      = false

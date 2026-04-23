@@ -1,0 +1,8 @@
+# TLS for app.cat-id.eu. Requires DNS A record → this host (LAED flexible IP).
+# If LAED already binds 80/443, add a site block on that Caddy instead of this container;
+# or use compose.app-only pattern (publish app on localhost) and proxy from LAED edge.
+
+app.cat-id.eu {
+  encode zstd gzip
+  reverse_proxy cat-id-app:8000
+}

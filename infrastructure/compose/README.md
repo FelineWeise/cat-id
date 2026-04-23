@@ -1,12 +1,12 @@
 # Compose (Docker on Scaleway)
 
-Docker Compose files and Caddy config for production and staging.
+Docker Compose files and Caddy config for **local/dev** and convenience layouts. **Production on the LAED host** with Scaleway Container Registry images only: use [`../deploy/`](../deploy/) (copy to e.g. `/opt/cat-id-data`); see [../../docs/deploy_scaleway.md](../../docs/deploy_scaleway.md).
 
 ## Production stack (app + TLS)
 
 On the **same** Scaleway instance that serves `app.cat-id.eu`:
 
-1. **DNS:** Apex and `app` **A** records → that instance’s public IPv4 (see [`../dns/terraform.tfvars.example`](../dns/terraform.tfvars.example) and [`../dns/dns_records.sample.json`](../dns/dns_records.sample.json)).
+1. **DNS:** Apex and `app` **A** records → the **LAED base host’s** public IPv4 (see [`../dns/terraform.tfvars.example`](../dns/terraform.tfvars.example) and [`../dns/dns_records.sample.json`](../dns/dns_records.sample.json)).
 2. **Terraform:** `cd infrastructure/dns && terraform apply`
 3. **On the VM:**
 

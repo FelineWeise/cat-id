@@ -41,5 +41,12 @@ infrastructure/dns/*.tfstate.*
 infrastructure/dns/crash.log
 infrastructure/dns/terraform.tfvars
 
+# Terraform (optional registry namespace in infrastructure/registry/)
+infrastructure/registry/.terraform/
+infrastructure/registry/*.tfstate
+infrastructure/registry/*.tfstate.*
+infrastructure/registry/crash.log
+infrastructure/registry/terraform.tfvars
+
 # Generated DNS apply configs (local)
 infrastructure/dns/dns_records.generated.json

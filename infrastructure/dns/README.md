@@ -21,7 +21,7 @@ Edit `terraform.tfvars` (gitignored) with your real `records` targets. Tracked `
 
 **Not managed here:** Spotify, Last.fm, or `APP_BASE_URL`. Those live in [`../compose/env/production.env`](../compose/env/production.env) (gitignored) on the server.
 
-**IPs:** Use your instance public IPv4 (prefer a **flexible IP**). For app + other services on one host, apex and `app` **A** records usually share the same address.
+**IPs:** Point **`cat-id.eu`** / **`app.cat-id.eu`** (and any other managed **A** records) at the **LAED base host’s public IPv4** (the flexible IP from **LAED** Terraform `output`, not a second VM in this repo). For apex + app on that same host, both records use that **one** address.
 
 ## Apply
 

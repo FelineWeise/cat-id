@@ -1,0 +1,40 @@
+# Production on LAED base host: image-only (Scaleway Container Registry). No build: here.
+# Place this directory (or these files) on the server, e.g. /opt/cat-id-data, then:
+#   export CAT_ID_IMAGE=rg.<region>.scw.cloud/<namespace>/cat-id:<tag>
+#   docker compose pull && docker compose up -d
+# Registry auth: reuse /root/.docker/config.json from LAED cloud-init if present.
+
+services:
+  cat-id:
+    image: ${CAT_ID_IMAGE:-rg.fr-par.scw.cloud/cat-id/cat-id:latest}
+    container_name: cat-id-app
+    restart: unless-stopped
+    env_file:
+      - ./production.env
+    expose:
+      - "8000"
+    networks:
+      - cat-id-net
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: cat-id-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    networks:
+      - cat-id-net
+    depends_on:
+      - cat-id
+
+networks:
+  cat-id-net:
+    name: cat-id-net
+    driver: bridge
+
+volumes:
+  caddy_data:

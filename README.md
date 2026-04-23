@@ -91,7 +91,7 @@ Point `APP_BASE_URL` and `SPOTIFY_REDIRECT_URI` at your real public URL (e.g. `h
 
 ## Simple terminal deployment (Scaleway)
 
-This repository supports a terminal-first deployment path using Scaleway hosting and Scaleway DNS.
+**Slim production path:** LAED Terraform owns the **VM, IP, volume, and cloud-init**. This repo owns **Scaleway DNS** ([`infrastructure/dns/`](infrastructure/dns/)), **production Compose + Caddy** with **registry-only images** ([`infrastructure/deploy/`](infrastructure/deploy/)), and **optional** a dedicated **registry namespace** ([`infrastructure/registry/`](infrastructure/registry/)). Workflow: **push image to Scaleway CR → SSH to LAED host → `docker compose pull && up -d`** from e.g. `/opt/cat-id-data`. Full steps: [`docs/deploy_scaleway.md`](docs/deploy_scaleway.md).
 
 ### Domain + Spotify production wiring
 
@@ -112,14 +112,14 @@ In Spotify Developer Dashboard, add:
 
 - [docs/deploy_scaleway.md](docs/deploy_scaleway.md)
 
-**Terraform DNS vs runtime env:** Terraform only declares the zone and A/AAAA **record targets** (your VM’s public IP) plus Scaleway `SCW_*` credentials. App OAuth keys and `APP_BASE_URL` belong in **`infrastructure/compose/env/production.env`** (gitignored), not in `terraform.tfvars`.
+**Terraform DNS vs runtime env:** Terraform only declares the zone and A/AAAA **record targets** (the **LAED base host’s** public IP). App OAuth keys and `APP_BASE_URL` belong in **`infrastructure/deploy/production.env`** on the server (or **`infrastructure/compose/env/production.env`** for dev-oriented compose), not in `terraform.tfvars`.
 
 To verify that `app.cat-id.eu` points to your expected Scaleway VM IP:
 
 ```bash
 DOMAIN=cat-id.eu \
 APP_HOST=app.cat-id.eu \
-EXPECTED_PUBLIC_IPV4=<your-scaleway-public-ipv4> \
+EXPECTED_PUBLIC_IPV4=<laed-base-public-ipv4> \
 ./scripts/dns_preflight.sh
 ```
 
@@ -156,7 +156,9 @@ If this app must not share identifiers with another internal project, keep a sep
 
 - Runbook: [docs/deploy_scaleway.md](docs/deploy_scaleway.md)
 - DNS (Terraform): [infrastructure/dns/README.md](infrastructure/dns/README.md)
-- Docker / Caddy: [infrastructure/compose/README.md](infrastructure/compose/README.md)
+- **Production** deploy bundle (image-only, SCW CR): [infrastructure/deploy/README.md](infrastructure/deploy/README.md)
+- Optional registry namespace TF: [infrastructure/registry/README.md](infrastructure/registry/README.md)
+- Dev / local Docker + Caddy: [infrastructure/compose/README.md](infrastructure/compose/README.md)
 - Scripts: `./scripts/dns_preflight.sh`, `./scripts/scaleway_dns_apply.sh`, `./scripts/print_spotify_prod_env.sh`, `./scripts/verify_cat_id_deployment.sh`
 
 ## GitHub repository (`cat-id`)
@@ -182,32 +184,43 @@ git remote set-url origin https://github.com/FelineWeise/cat-id.git
 
 3. **Container image:** default in Compose is **GHCR** `ghcr.io/felineweise/cat-id:latest` (same name as the repo). Override with `CAT_ID_IMAGE` if needed. See [infrastructure/compose/README.md](infrastructure/compose/README.md).
 
-## Ship code to the server (git)
+## Ship to production (LAED host, registry images)
 
-1. **Commit and push** your branch (or `main`):
+1. **Build and push** the image to Scaleway Container Registry (dedicated namespace via [`infrastructure/registry/`](infrastructure/registry/) or under LAED’s namespace—see [docs/deploy_scaleway.md](docs/deploy_scaleway.md)).
+
+2. **SSH** to the **LAED** base host.
+
+3. From the directory holding **`infrastructure/deploy/`** files (e.g. **`/opt/cat-id-data`**), set **`CAT_ID_IMAGE`** to the new tag/digest and redeploy:
 
 ```bash
-git status
-git add -A
-git commit -m "Describe your change"
-git push origin <your-branch>
+ssh <user>@<laed-base-ip>
+cd /opt/cat-id-data
+export CAT_ID_IMAGE=rg.fr-par.scw.cloud/cat-id/cat-id:v1.0.0
+docker compose pull
+docker compose up -d
 ```
 
-2. **Merge** via GitHub **Pull request** (or merge locally: `git checkout main && git merge <your-branch> && git push origin main`).
+Edit **`production.env`** there when OAuth URLs or secrets change; keep it out of git.
 
-3. **On the Scaleway instance**, update the checkout and restart containers:
+**Optional git-based workflow:** you can still clone the repo on the server and use [`infrastructure/compose/compose.stack.yml`](infrastructure/compose/compose.stack.yml) with GHCR or local `build:` for non-production experiments; the recommended **slim** path is **`infrastructure/deploy/`** + CR images only.
+
+---
+
+## Ship code via git (optional, dev-oriented)
+
+1. **Commit and push** your branch (or `main`).
+
+2. **On the host**, update a clone and restart **compose** if you use the repo checkout layout:
 
 ```bash
 ssh <user>@<server-ip>
-cd /opt/cat-id   # or your clone path (folder name matches repo: cat-id)
-git fetch origin
-git checkout main
-git pull origin main
+cd /opt/cat-id
+git pull
 docker compose -f infrastructure/compose/compose.stack.yml pull
 docker compose -f infrastructure/compose/compose.stack.yml up -d
 ```
 
-If you build from the Dockerfile instead of pulling an image, use `up -d --build`. Edit `infrastructure/compose/env/production.env` on the server only when secrets or URLs change; that file is not in git.
+For local builds instead of pulled images, use `up -d --build`.
 
 ## Post-launch hardening roadmap
 
@@ -217,21 +230,19 @@ If you build from the Dockerfile instead of pulling an image, use `up -d --build
 
 ## Docker Compose layouts
 
-Typical layout on one instance:
+**Production (Scaleway CR, LAED host):** copy [`infrastructure/deploy/`](infrastructure/deploy/) to e.g. `/opt/cat-id-data` and run `docker compose` there with **`CAT_ID_IMAGE`** pointing at `rg.<region>.scw.cloud/...` — no `build:` in that file.
 
-- Deploy checkout under e.g. `/opt/cat-id` (clone of `FelineWeise/cat-id`), separate Compose network from other stacks, hostname routing at the edge.
+**Dev / convenience** under `infrastructure/compose/`:
 
-Files under `infrastructure/compose/`:
-
-- `compose.stack.yml` — app + Caddy on 80/443 (skip Caddy if those ports are already used; see README)
-- `compose.app.yml` — app container only (pair with your existing reverse proxy)
+- `compose.stack.yml` — app + Caddy on 80/443 (default image GHCR; skip Caddy if LAED already uses 80/443)
+- `compose.app.yml` — app only (pair with LAED or another reverse proxy)
 - `compose.staging.yml` — staging
 - `Caddyfile.production` / `Caddyfile.example`
-- `env/*.env.example` → copy to gitignored `production.env` / `staging.env` on the server
+- `env/*.env.example` → gitignored `production.env` / `staging.env`
 
-Details: [infrastructure/compose/README.md](infrastructure/compose/README.md).
+Details: [infrastructure/deploy/README.md](infrastructure/deploy/README.md), [infrastructure/compose/README.md](infrastructure/compose/README.md).
 
-**Redeploy:** update `production.env` if needed → `docker compose -f infrastructure/compose/compose.stack.yml up -d` → `./scripts/verify_cat_id_deployment.sh` → optional `./scripts/smoke_test.sh`.
+**Redeploy (deploy bundle):** update `production.env` and `CAT_ID_IMAGE` if needed → `docker compose pull && docker compose up -d` → `./scripts/verify_cat_id_deployment.sh` → optional `./scripts/smoke_test.sh`.
 
 ## API
 
