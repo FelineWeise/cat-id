@@ -13,6 +13,22 @@
       <p class="subtitle">Paste a Spotify track link to find similar songs</p>
     </header>
 
+    <div id="spotify-auth" class="spotify-auth">
+      <button id="spotify-login-btn" class="spotify-login-btn">Connect Spotify</button>
+      <span id="spotify-user" class="spotify-user hidden"></span>
+      <button id="spotify-logout-btn" class="spotify-logout-btn hidden">Disconnect</button>
+    </div>
+
+    <div class="mode-toggle">
+      <button id="mode-lastfm" class="mode-btn active" data-mode="lastfm">Listener Similarity</button>
+      <button id="mode-audio" class="mode-btn" data-mode="audio">Audio Similarity</button>
+    </div>
+
+    <div class="view-toggle">
+      <button id="view-search" class="view-btn active" data-view="search">Search</button>
+      <button id="view-drill" class="view-btn" data-view="drill">Drill Down</button>
+    </div>
+
     <form id="search-form">
       <div class="input-row">
         <input
@@ -35,7 +51,48 @@
       </div>
     </form>
 
+    <div id="audio-weights" class="audio-weights hidden">
+      <label class="weights-heading">Similarity Weights <span class="hint">(dimensions above 30% become recommendation targets)</span></label>
+      <div class="weight-sliders">
+        <div class="weight-row" data-key="tempo">
+          <label>Tempo / BPM</label>
+          <input type="range" min="0" max="100" value="50" />
+          <span class="weight-val">50%</span>
+        </div>
+        <div class="weight-row" data-key="energy">
+          <label>Energy</label>
+          <input type="range" min="0" max="100" value="50" />
+          <span class="weight-val">50%</span>
+        </div>
+        <div class="weight-row" data-key="valence">
+          <label>Mood / Valence</label>
+          <input type="range" min="0" max="100" value="50" />
+          <span class="weight-val">50%</span>
+        </div>
+        <div class="weight-row" data-key="danceability">
+          <label>Danceability</label>
+          <input type="range" min="0" max="100" value="50" />
+          <span class="weight-val">50%</span>
+        </div>
+        <div class="weight-row" data-key="acousticness">
+          <label>Acousticness</label>
+          <input type="range" min="0" max="100" value="50" />
+          <span class="weight-val">50%</span>
+        </div>
+        <div class="weight-row" data-key="instrumentalness">
+          <label>Instrumentalness</label>
+          <input type="range" min="0" max="100" value="50" />
+          <span class="weight-val">50%</span>
+        </div>
+      </div>
+    </div>
+
     <div id="seed-track" class="seed-track hidden"></div>
+
+    <div id="drill-panel" class="drill-panel hidden">
+      <div id="drill-breadcrumbs" class="drill-breadcrumbs"></div>
+      <div id="drill-profile" class="drill-profile"></div>
+    </div>
 
     <!-- Filter panel: shown after results load -->
     <div id="filter-panel" class="filter-panel hidden">
@@ -52,12 +109,20 @@
 
         <div id="tag-filter" class="tag-filter hidden">
           <label>Tags <span class="hint">(click to filter)</span></label>
-          <div id="tag-chips" class="tag-chips"></div>
+          <div id="quick-filters" class="quick-filters"></div>
+          <div id="tag-sections" class="tag-sections"></div>
         </div>
       </details>
     </div>
 
+    <div id="actions-bar" class="actions-bar hidden">
+      <button id="save-playlist-btn" class="action-btn" title="Save filtered results as a Spotify playlist">Save as Playlist</button>
+      <button id="add-queue-btn" class="action-btn" title="Add filtered results to your Spotify queue">Add to Queue</button>
+      <span id="action-status" class="action-status"></span>
+    </div>
+
     <div id="results" class="results"></div>
+    <button id="discover-more-btn" class="discover-more-btn hidden">Discover More</button>
     <div id="error" class="error hidden"></div>
     <div id="loading" class="loading hidden">
       <div class="spinner"></div>

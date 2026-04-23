@@ -6,12 +6,40 @@ dist/
 build/
 .eggs/
 *.egg
-.env
+*.pem
 .venv/
 venv/
-env/
+# Python venv folder at repo root only (do not use bare `env/` — it ignores all paths named env/)
+/env/
 node_modules/
 .DS_Store
 *.log
 .idea/
 .vscode/
+
+# ---- Environment files (secrets) — keep *.env.example tracked ----
+.env
+.env.*
+!.env.example
+# Any *.env except templates ending in .env.example
+*.env
+!*.env.example
+
+# Local / tool caches
+.cache
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Terraform (DNS in infrastructure/dns/)
+infrastructure/dns/.terraform/
+infrastructure/dns/*.tfstate
+infrastructure/dns/*.tfstate.*
+infrastructure/dns/crash.log
+infrastructure/dns/terraform.tfvars
+
+# Generated DNS apply configs (local)
+infrastructure/dns/dns_records.generated.json

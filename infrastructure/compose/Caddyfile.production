@@ -1,0 +1,7 @@
+# Production TLS: app.cat-id.eu only (no staging hostname — avoids ACME for names without DNS).
+# Used by compose.stack.yml; Caddy shares Docker network with cat-id-app.
+
+app.cat-id.eu {
+  encode zstd gzip
+  reverse_proxy cat-id-app:8000
+}

@@ -1,13 +1,16 @@
 # Similar Tracks Finder
 
-A web app that finds songs similar to a given Spotify track using Last.fm's collaborative filtering — powered by 20+ years of real listener data.
+A web app that finds songs similar to a given Spotify track using two discovery modes: **Listener Similarity** (Last.fm collaborative filtering) and **Audio Similarity** (Spotify audio features + recommendations with configurable dimension weights).
 
 ## Features
 
-- **Spotify URL input** – paste any Spotify track link
-- **Last.fm similarity** – finds tracks that listeners of the seed track also enjoy, with match scores
+- **Spotify URL input** — paste any Spotify track link
+- **Dual discovery modes:**
+  - **Listener Similarity** — finds tracks that listeners of the seed track also enjoy via Last.fm, with match scores, BPM filtering, and tag-based re-ranking
+  - **Audio Similarity** — pulls Spotify audio features for the seed track, passes weighted targets to Spotify's recommendations API, and ranks candidates by weighted distance across tempo, energy, valence, danceability, acousticness, and instrumentalness
+- **Configurable similarity weights** — sliders for each audio dimension; traits with weight above 30% are used as recommendation targets
 - **30-second preview playback** via Deezer (fallback when Spotify previews are unavailable)
-- **Spotify cross-referencing** – results link back to Spotify with album art
+- **Spotify integration** — album art, direct links, playlist creation, and queue control (requires OAuth)
 - Configurable result count (5 / 10 / 20 / 50)
 
 ## Prerequisites
@@ -15,35 +18,224 @@ A web app that finds songs similar to a given Spotify track using Last.fm's coll
 - Python 3.10+
 - [Poetry](https://python-poetry.org/docs/#installation)
 - A **Spotify Developer** application (free) — create one at https://developer.spotify.com/dashboard
-- A **Last.fm API key** (free) — create one at https://www.last.fm/api/account/create
+- A **Last.fm API key** (free, required for Listener mode) — create one at https://www.last.fm/api/account/create
+
+> **Note on Spotify API access:** Audio features and recommendations require your own Spotify Client ID and Secret. Spotify restricted these endpoints for newer apps — verify that your app has access in the developer dashboard before using Audio Similarity mode.
 
 ## Setup
 
 ```bash
-# Clone the repo
-cd /Users/feline/Desktop/Repositories
-git clone https://github.com/FelineWeise/similar-tracks.git
-cd similar-tracks
+# Clone (repo path on GitHub should be FelineWeise/cat-id — rename in GitHub Settings if needed)
+git clone https://github.com/FelineWeise/cat-id.git
+cd cat-id
 
 # Install dependencies
 poetry install
 
 # Configure credentials
 cp .env.example .env
-# Edit .env and add your Spotify Client ID/Secret and Last.fm API Key
+# Edit .env — see the table below for required keys
 ```
+
+### Environment variables
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `SPOTIFY_CLIENT_ID` | Yes | Client credentials for track lookup and audio features |
+| `SPOTIFY_CLIENT_SECRET` | Yes | Client credentials for track lookup and audio features |
+| `LASTFM_API_KEY` | Listener mode | Last.fm `track.getSimilar` and tag enrichment |
+| `SPOTIFY_REDIRECT_URI` | OAuth features | Playlist/queue actions; must match your Spotify app settings |
+| `APP_BASE_URL` | Optional | Base URL for current environment (local dev / production) |
+| `APP_ENV` | Optional | `development` (local SSL/reload) or `production` |
+| `ALLOWED_ORIGINS` | Recommended | Comma-separated CORS allowlist |
+| `ENABLE_DEBUG_ENDPOINT` | Optional | Set `false` for public deployments |
 
 ## Running
 
+For Spotify OAuth to work reliably in browser, use a trusted local certificate.
+
 ```bash
+# one-time cert setup (recommended)
+./setup_certs.sh
+
+# run the app
 poetry run python run.py
 ```
 
-Open http://localhost:8000 in your browser.
+Then open **`https://localhost:8000`** (do not use `0.0.0.0`).
+
+`run.py` uses development mode defaults:
+- host `0.0.0.0`
+- local SSL with `key.pem` + `cert.pem`
+- auto-reload enabled
+
+Useful local overrides:
+- `NO_SSL=1` to run without local certs
+- `NO_RELOAD=1` to disable reload
+- `HOST=127.0.0.1 PORT=8000` to pin binding explicitly
+
+### Spotify queue + link behavior
+
+- Queue actions require a Spotify playback device to exist for your account.
+- If no active device is found, the backend attempts one automatic transfer to an available device, then retries queueing.
+- If no devices are available at all, open Spotify on desktop/mobile/web player first, then try queueing again.
+- Track links attempt to open the Spotify desktop/app first (`spotify:` deep link) and fall back to web player if the OS/browser does not hand off to the app.
+
+## Local dev without a public URL
+
+Use `https://localhost:8000` with `./setup_certs.sh` and a matching redirect URI in Spotify (localhost is allowed for many apps). If your Spotify app rejects localhost, use a tunneling tool and set `APP_BASE_URL` / `SPOTIFY_REDIRECT_URI` to the tunnel URL, then restart the backend.
+
+## Production HTTPS domain
+
+Point `APP_BASE_URL` and `SPOTIFY_REDIRECT_URI` at your real public URL (e.g. `https://app.cat-id.eu`), add the callback in the Spotify dashboard, and terminate TLS at your host or reverse proxy (see Scaleway section below).
+
+## Simple terminal deployment (Scaleway)
+
+This repository supports a terminal-first deployment path using Scaleway hosting and Scaleway DNS.
+
+### Domain + Spotify production wiring
+
+Recommended production hostname:
+- `https://app.cat-id.eu`
+
+Set production env vars:
+- `APP_BASE_URL=https://app.cat-id.eu`
+- `SPOTIFY_REDIRECT_URI=https://app.cat-id.eu/api/spotify/callback`
+- `APP_ENV=production`
+- `ENABLE_DEBUG_ENDPOINT=false`
+- `ALLOWED_ORIGINS=https://app.cat-id.eu`
+
+In Spotify Developer Dashboard, add:
+- `https://app.cat-id.eu/api/spotify/callback`
+
+### DNS and deploy runbook
+
+- [docs/deploy_scaleway.md](docs/deploy_scaleway.md)
+
+**Terraform DNS vs runtime env:** Terraform only declares the zone and A/AAAA **record targets** (your VM’s public IP) plus Scaleway `SCW_*` credentials. App OAuth keys and `APP_BASE_URL` belong in **`infrastructure/compose/env/production.env`** (gitignored), not in `terraform.tfvars`.
+
+To verify that `app.cat-id.eu` points to your expected Scaleway VM IP:
+
+```bash
+DOMAIN=cat-id.eu \
+APP_HOST=app.cat-id.eu \
+EXPECTED_PUBLIC_IPV4=<your-scaleway-public-ipv4> \
+./scripts/dns_preflight.sh
+```
+
+## Public validation checklist (web + app clients)
+
+After each deploy:
+
+1. `GET /api/health` returns 200.
+2. App homepage loads from `https://app.cat-id.eu`.
+3. `/api/similar` and `/api/similar/audio` return expected payloads.
+4. Spotify login/callback works on production callback URL.
+5. Playlist/queue actions succeed for a logged-in Spotify user.
+6. `GET /api/debug/tags` is unavailable in production.
+
+For mobile/web-app clients, use:
+- `https://app.cat-id.eu/api/similar`
+- `https://app.cat-id.eu/api/similar/audio`
+
+Optional automated smoke test:
+
+```bash
+BASE_URL=https://app.cat-id.eu ./scripts/smoke_test.sh
+```
+
+## Isolation guardrail (optional)
+
+If this app must not share identifiers with another internal project, keep a separate Scaleway project/DNS state and run:
+
+```bash
+./scripts/preflight_isolation_check.sh
+```
+
+## Scaleway layout in this repo
+
+- Runbook: [docs/deploy_scaleway.md](docs/deploy_scaleway.md)
+- DNS (Terraform): [infrastructure/dns/README.md](infrastructure/dns/README.md)
+- Docker / Caddy: [infrastructure/compose/README.md](infrastructure/compose/README.md)
+- Scripts: `./scripts/dns_preflight.sh`, `./scripts/scaleway_dns_apply.sh`, `./scripts/print_spotify_prod_env.sh`, `./scripts/verify_cat_id_deployment.sh`
+
+## GitHub repository (`cat-id`)
+
+Canonical remote: **https://github.com/FelineWeise/cat-id**
+
+The product host is **`app.cat-id.eu`**; the **GitHub** repository name should be **`cat-id`** under **`FelineWeise`** so paths match the brand (clone folder is `cat-id`, default image is `ghcr.io/felineweise/cat-id`).
+
+**Rename an existing repo on GitHub:** open the repository → **Settings → General** → **Repository name** → set to `cat-id` → **Rename**. GitHub keeps a redirect from the old name for a while; update all `git remote` URLs to the new path when you can.
+
+1. **Clone** (HTTPS or SSH):
+
+```bash
+git clone https://github.com/FelineWeise/cat-id.git
+cd cat-id
+```
+
+2. **Point an existing clone at the new URL** (after rename):
+
+```bash
+git remote set-url origin https://github.com/FelineWeise/cat-id.git
+```
+
+3. **Container image:** default in Compose is **GHCR** `ghcr.io/felineweise/cat-id:latest` (same name as the repo). Override with `CAT_ID_IMAGE` if needed. See [infrastructure/compose/README.md](infrastructure/compose/README.md).
+
+## Ship code to the server (git)
+
+1. **Commit and push** your branch (or `main`):
+
+```bash
+git status
+git add -A
+git commit -m "Describe your change"
+git push origin <your-branch>
+```
+
+2. **Merge** via GitHub **Pull request** (or merge locally: `git checkout main && git merge <your-branch> && git push origin main`).
+
+3. **On the Scaleway instance**, update the checkout and restart containers:
+
+```bash
+ssh <user>@<server-ip>
+cd /opt/cat-id   # or your clone path (folder name matches repo: cat-id)
+git fetch origin
+git checkout main
+git pull origin main
+docker compose -f infrastructure/compose/compose.stack.yml pull
+docker compose -f infrastructure/compose/compose.stack.yml up -d
+```
+
+If you build from the Dockerfile instead of pulling an image, use `up -d --build`. Edit `infrastructure/compose/env/production.env` on the server only when secrets or URLs change; that file is not in git.
+
+## Post-launch hardening roadmap
+
+- Move OAuth session storage from in-memory to Redis for multi-instance scaling.
+- Add a staging environment (`staging.app.cat-id.eu`) before frequent releases.
+- Add CI checks for lint/test/build and optional gated deploy.
+
+## Docker Compose layouts
+
+Typical layout on one instance:
+
+- Deploy checkout under e.g. `/opt/cat-id` (clone of `FelineWeise/cat-id`), separate Compose network from other stacks, hostname routing at the edge.
+
+Files under `infrastructure/compose/`:
+
+- `compose.stack.yml` — app + Caddy on 80/443 (skip Caddy if those ports are already used; see README)
+- `compose.app.yml` — app container only (pair with your existing reverse proxy)
+- `compose.staging.yml` — staging
+- `Caddyfile.production` / `Caddyfile.example`
+- `env/*.env.example` → copy to gitignored `production.env` / `staging.env` on the server
+
+Details: [infrastructure/compose/README.md](infrastructure/compose/README.md).
+
+**Redeploy:** update `production.env` if needed → `docker compose -f infrastructure/compose/compose.stack.yml up -d` → `./scripts/verify_cat_id_deployment.sh` → optional `./scripts/smoke_test.sh`.
 
 ## API
 
-### `POST /api/similar`
+### `POST /api/similar` — Listener Similarity (Last.fm)
 
 **Request body:**
 
@@ -54,20 +246,43 @@ Open http://localhost:8000 in your browser.
 }
 ```
 
-**Response:** JSON with `seed_track` and `similar_tracks`, each containing name, artists, album, album art, Spotify URL, match score, and preview URL.
+**Response:** JSON with `seed_track` and `similar_tracks`, each containing name, artists, album, album art, Spotify URL, match score, BPM, and tags.
+
+### `POST /api/similar/audio` — Audio Similarity (Spotify)
+
+**Request body:**
+
+```json
+{
+  "url": "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT",
+  "limit": 20,
+  "weights": {
+    "tempo": 0.8,
+    "energy": 0.6,
+    "valence": 0.4,
+    "danceability": 0.0,
+    "acousticness": 0.5,
+    "instrumentalness": 0.0
+  }
+}
+```
+
+Dimensions with weight > 0.3 are sent as `target_*` parameters to Spotify's recommendations endpoint. All candidates are then scored by weighted Euclidean distance from the seed's audio features.
+
+**Response:** Same shape as `/api/similar`, with `audio_features` populated on each track.
 
 ## How It Works
 
 1. **Spotify** resolves the pasted URL to track metadata (name, artist, album art)
-2. **Last.fm** `track.getSimilar` returns similar tracks based on collaborative listening patterns
-3. Each result is cross-referenced on **Spotify** for album art and links
+2. **Listener mode:** Last.fm `track.getSimilar` returns tracks based on collaborative listening patterns; results are enriched with Spotify metadata, Deezer BPM/previews, and Last.fm tags
+3. **Audio mode:** Spotify `audio-features` extracts the seed's audio profile; weighted targets are passed to `recommendations`; candidates are scored by normalized distance per dimension
 4. **Deezer** provides 30-second audio previews as a fallback
 
 ## Tech Stack
 
 - **Backend:** Python, FastAPI, Spotipy, httpx
 - **Frontend:** Vanilla HTML / CSS / JS
-- **APIs:** Spotify Web API (track lookup), Last.fm (similarity), Deezer (audio previews)
+- **APIs:** Spotify Web API (track lookup, audio features, recommendations), Last.fm (similarity), Deezer (audio previews)
 
 ## License
 

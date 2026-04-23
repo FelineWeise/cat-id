@@ -1,0 +1,36 @@
+domain = "cat-id.eu"
+
+# Apex zone on Scaleway Domains & DNS:
+# - domain = root domain
+# - subdomain = "" creates the apex zone (cat-id.eu)
+subdomain = ""
+
+# Optional: only set if you do NOT export SCW_DEFAULT_PROJECT_ID
+# project_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+records = {
+  # Example apex record (replace with your real hosting target)
+  apex_a = {
+    name = ""
+    type = "A"
+    # LAED single-host: apex + app point at the same instance public IPv4 (verify in console).
+    data = "51.15.207.5"
+    ttl  = 300
+  }
+
+  # Example app subdomain (replace with your Scaleway endpoint)
+  app_a = {
+    name = "app"
+    type = "A"
+    data = "51.15.207.5"
+    ttl  = 300
+  }
+
+  # Optional AAAA if your Scaleway host has IPv6
+  # app_aaaa = {
+  #   name = "app"
+  #   type = "AAAA"
+  #   data = "2001:db8::10"
+  #   ttl  = 300
+  # }
+}

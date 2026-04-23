@@ -1,0 +1,39 @@
+# Production stack: cat-id app + Caddy (80/443) on one host.
+# Run from repo: docker compose -f infrastructure/compose/compose.stack.yml up -d
+# Prerequisites: env/production.env filled; DNS A records for app.cat-id.eu → this host.
+# If 80/443 are already in use, use compose.app.yml only and extend your existing reverse proxy (see README.md).
+
+services:
+  cat-id:
+    image: ${CAT_ID_IMAGE:-ghcr.io/felineweise/cat-id:latest}
+    container_name: cat-id-app
+    restart: unless-stopped
+    env_file:
+      - ./env/production.env
+    expose:
+      - "8000"
+    networks:
+      - cat-id-net
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: cat-id-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.production:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    networks:
+      - cat-id-net
+    depends_on:
+      - cat-id
+
+networks:
+  cat-id-net:
+    name: cat-id-net
+    driver: bridge
+
+volumes:
+  caddy_data:

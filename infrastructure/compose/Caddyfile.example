@@ -1,0 +1,9 @@
+app.cat-id.eu {
+  encode zstd gzip
+  reverse_proxy cat-id-app:8000
+}
+
+staging.app.cat-id.eu {
+  encode zstd gzip
+  reverse_proxy cat-id-staging-app:8000
+}

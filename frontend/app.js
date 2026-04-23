@@ -11,26 +11,155 @@
   const bpmSlider = document.getElementById("bpm-tolerance");
   const bpmLabel = document.getElementById("bpm-label");
   const tagFilter = document.getElementById("tag-filter");
-  const tagChips = document.getElementById("tag-chips");
+  const tagSections = document.getElementById("tag-sections");
+  const quickFiltersEl = document.getElementById("quick-filters");
+  const actionsBar = document.getElementById("actions-bar");
+  const savePlaylistBtn = document.getElementById("save-playlist-btn");
+  const addQueueBtn = document.getElementById("add-queue-btn");
+  const actionStatus = document.getElementById("action-status");
+  const spotifyLoginBtn = document.getElementById("spotify-login-btn");
+  const spotifyUserEl = document.getElementById("spotify-user");
+  const spotifyLogoutBtn = document.getElementById("spotify-logout-btn");
+  const audioWeightsPanel = document.getElementById("audio-weights");
+  const weightRows = audioWeightsPanel.querySelectorAll(".weight-row");
+  const modeBtns = document.querySelectorAll(".mode-btn");
+  const viewBtns = document.querySelectorAll(".view-btn");
+  const drillPanel = document.getElementById("drill-panel");
+  const drillBreadcrumbs = document.getElementById("drill-breadcrumbs");
+  const drillProfile = document.getElementById("drill-profile");
 
   let currentAudio = null;
+  let spotifyConnected = false;
+  let currentMode = "lastfm";
 
-  // Full result pool from the API (up to 50 enriched tracks)
   let allTracks = [];
   let seedTrack = null;
   let seedTags = [];
+  let tagCategories = {};
   let selectedTags = new Set();
   let displayLimit = 10;
+  let approximated = false;
+  let seenTrackKeys = new Set();
+  let exhausted = false;
+  let softFiltering = false;
+  let activeView = "search";
+  let traceHistory = [];
+  let visibleTracks = [];
 
+  const discoverMoreBtn = document.getElementById("discover-more-btn");
+
+  const CATEGORY_LABELS = {
+    mood: "Mood",
+    genre: "Style",
+    vocals_instrumentals: "Vocals / Instrumentation",
+  };
+
+  const QUICK_FILTERS = [
+    { label: "Chill mood", tags: ["chill", "chillout", "relaxing", "calm", "ambient", "peaceful", "dreamy", "atmospheric"] },
+    { label: "More instrumental", tags: ["instrumental", "no vocal", "no vocals"] },
+    { label: "More vocal", tags: ["female vocal", "male vocal", "vocals", "vocal", "female vocals", "male vocals"] },
+  ];
+
+  const AUDIO_DIMENSION_LABELS = {
+    tempo: "BPM",
+    energy: "Energy",
+    valence: "Valence",
+    danceability: "Dance",
+    acousticness: "Acoustic",
+    instrumentalness: "Instrumental",
+  };
+
+  // --- Mode toggle ---
+  modeBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.mode;
+      if (mode === currentMode) return;
+      currentMode = mode;
+      modeBtns.forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+      audioWeightsPanel.classList.toggle("hidden", mode !== "audio");
+      filterPanel.classList.add("hidden");
+    });
+  });
+
+  function setView(view) {
+    activeView = view;
+    viewBtns.forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+    drillPanel.classList.toggle("hidden", view !== "drill");
+    if (view === "drill") renderDrillPanel();
+  }
+
+  viewBtns.forEach((btn) => {
+    btn.addEventListener("click", () => setView(btn.dataset.view));
+  });
+
+  // --- Weight sliders ---
+  weightRows.forEach((row) => {
+    const slider = row.querySelector("input[type=range]");
+    const valSpan = row.querySelector(".weight-val");
+    slider.addEventListener("input", () => {
+      valSpan.textContent = slider.value + "%";
+    });
+  });
+
+  function getWeights() {
+    const weights = {};
+    weightRows.forEach((row) => {
+      const key = row.dataset.key;
+      const slider = row.querySelector("input[type=range]");
+      weights[key] = parseInt(slider.value, 10) / 100;
+    });
+    return weights;
+  }
+
+  // --- Form ---
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     await search();
   });
 
-  // Re-rank when filters change
   bpmSlider.addEventListener("input", () => {
     updateBpmLabel();
+    softFiltering = false;
     renderFiltered();
+  });
+
+  discoverMoreBtn.addEventListener("click", async () => {
+    stopAudio();
+    discoverMoreBtn.disabled = true;
+    discoverMoreBtn.textContent = "Searching\u2026";
+    try {
+      let data;
+      const url = urlInput.value.trim();
+      const excludeList = [...seenTrackKeys];
+      if (currentMode === "audio") {
+        data = await fetchAudioSimilar(url, excludeList);
+      } else {
+        data = await fetchLastfmSimilar(url, excludeList);
+      }
+      if (data.similar_tracks.length === 0) {
+        exhausted = true;
+        renderFiltered();
+        return;
+      }
+      allTracks = data.similar_tracks;
+      seedTags = data.seed_tags || seedTags;
+      tagCategories = data.tag_categories || tagCategories;
+      approximated = data.approximated || false;
+      addToSeen(allTracks);
+      softFiltering = false;
+      buildFilters();
+      if (rankTracks().length === 0 && allTracks.length > 0) {
+        softFiltering = true;
+      }
+      renderFiltered();
+      updateActionsBar();
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.classList.remove("hidden");
+    } finally {
+      discoverMoreBtn.disabled = false;
+      discoverMoreBtn.textContent = "Discover More";
+    }
   });
 
   function updateBpmLabel() {
@@ -44,6 +173,124 @@
     }
   }
 
+  function trackKey(t) {
+    return `${(t.artists || [])[0] || ""}::${t.name}`.toLowerCase();
+  }
+
+  function addToSeen(tracks) {
+    for (const t of tracks) seenTrackKeys.add(trackKey(t));
+  }
+
+  function averageFeatures(entries) {
+    const keys = ["tempo", "energy", "valence", "danceability", "acousticness", "instrumentalness"];
+    const sums = Object.fromEntries(keys.map((k) => [k, 0]));
+    const counts = Object.fromEntries(keys.map((k) => [k, 0]));
+    for (const entry of entries) {
+      const af = entry.audioFeatures || {};
+      for (const key of keys) {
+        const val = af[key];
+        if (typeof val === "number") {
+          sums[key] += val;
+          counts[key] += 1;
+        }
+      }
+      if (typeof entry.bpm === "number") {
+        sums.tempo += entry.bpm;
+        counts.tempo += 1;
+      }
+    }
+    const out = {};
+    for (const key of keys) {
+      out[key] = counts[key] > 0 ? sums[key] / counts[key] : null;
+    }
+    return out;
+  }
+
+  function intersectTags(entries) {
+    if (!entries.length) return [];
+    let inter = new Set(entries[0].tags || []);
+    for (let i = 1; i < entries.length; i++) {
+      const s = new Set(entries[i].tags || []);
+      inter = new Set([...inter].filter((t) => s.has(t)));
+    }
+    return [...inter];
+  }
+
+  function setWeightSlidersFromProfile(avg) {
+    weightRows.forEach((row) => {
+      const key = row.dataset.key;
+      if (key === "tempo") return;
+      const val = avg[key];
+      if (typeof val !== "number") return;
+      const slider = row.querySelector("input[type=range]");
+      const pct = Math.max(0, Math.min(100, Math.round(val * 100)));
+      slider.value = String(pct);
+      row.querySelector(".weight-val").textContent = `${pct}%`;
+    });
+  }
+
+  function renderDrillPanel() {
+    if (activeView !== "drill") return;
+    if (!traceHistory.length) {
+      drillBreadcrumbs.innerHTML = "";
+      drillProfile.textContent = "Select a result track using Drill to start narrowing.";
+      return;
+    }
+    const avg = averageFeatures(traceHistory);
+    const tags = intersectTags(traceHistory);
+
+    drillBreadcrumbs.innerHTML = traceHistory
+      .map((t, i) => `<button class="crumb-btn ${i === traceHistory.length - 1 ? "active" : ""}" data-crumb="${i}">${esc(t.track.name)}</button>`)
+      .join("");
+    drillProfile.innerHTML = `
+      <div><strong>Narrowed Tags:</strong> ${tags.length ? tags.map((t) => esc(t)).join(", ") : "None"}</div>
+      <div><strong>Avg Features:</strong>
+        Energy ${fmtPct(avg.energy)} | Valence ${fmtPct(avg.valence)} | Dance ${fmtPct(avg.danceability)} | Acoustic ${fmtPct(avg.acousticness)} | Instrumental ${fmtPct(avg.instrumentalness)} | BPM ${fmtTempo(avg.tempo)}
+      </div>
+    `;
+    drillBreadcrumbs.querySelectorAll(".crumb-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const idx = parseInt(btn.dataset.crumb, 10);
+        traceHistory = traceHistory.slice(0, idx + 1);
+        await runDrillSearch(traceHistory[idx].track);
+      });
+    });
+  }
+
+  function fmtPct(v) {
+    return typeof v === "number" ? `${Math.round(v * 100)}%` : "-";
+  }
+  function fmtTempo(v) {
+    return typeof v === "number" ? `${Math.round(v)}` : "-";
+  }
+
+  async function runDrillSearch(track) {
+    if (!track || !track.spotify_url) return;
+    const avg = averageFeatures(traceHistory);
+    const interTags = intersectTags(traceHistory);
+    selectedTags = new Set(interTags);
+    setWeightSlidersFromProfile(avg);
+
+    let data;
+    if (currentMode === "audio") {
+      data = await fetchAudioSimilar(track.spotify_url);
+    } else {
+      data = await fetchLastfmSimilar(track.spotify_url);
+    }
+    seedTrack = data.seed_track;
+    allTracks = data.similar_tracks;
+    seedTags = data.seed_tags || [];
+    tagCategories = data.tag_categories || {};
+    approximated = data.approximated || false;
+    addToSeen(allTracks);
+    renderSeed(seedTrack);
+    buildFilters();
+    renderFiltered();
+    updateActionsBar();
+    setView("drill");
+    renderDrillPanel();
+  }
+
   async function search() {
     const url = urlInput.value.trim();
     if (!url) return;
@@ -52,6 +299,7 @@
     stopAudio();
     seedEl.classList.add("hidden");
     filterPanel.classList.add("hidden");
+    discoverMoreBtn.classList.add("hidden");
     resultsEl.innerHTML = "";
     errorEl.classList.add("hidden");
     loadingEl.classList.remove("hidden");
@@ -60,30 +308,30 @@
     seedTrack = null;
     seedTags = [];
     selectedTags.clear();
+    seenTrackKeys.clear();
+    exhausted = false;
+    softFiltering = false;
+    if (activeView === "search") traceHistory = [];
 
     try {
-      const resp = await fetch("/api/similar", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, limit: 50 }),
-      });
-
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}));
-        throw new Error(data.detail || `Request failed (${resp.status})`);
+      let data;
+      if (currentMode === "audio") {
+        data = await fetchAudioSimilar(url);
+      } else {
+        data = await fetchLastfmSimilar(url);
       }
 
-      const data = await resp.json();
       seedTrack = data.seed_track;
       allTracks = data.similar_tracks;
       seedTags = data.seed_tags || [];
-
-      console.log("[debug] seed_tags:", seedTags);
-      console.log("[debug] tracks with tags:", allTracks.filter(t => t.tags && t.tags.length > 0).length, "/", allTracks.length);
+      tagCategories = data.tag_categories || {};
+      approximated = data.approximated || false;
+      addToSeen(allTracks);
 
       renderSeed(seedTrack);
       buildFilters();
       renderFiltered();
+      updateActionsBar();
     } catch (err) {
       errorEl.textContent = err.message;
       errorEl.classList.remove("hidden");
@@ -93,25 +341,66 @@
     }
   }
 
+  async function fetchLastfmSimilar(url, exclude = []) {
+    const resp = await fetch("/api/similar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, limit: 50, exclude }),
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      throw new Error(data.detail || `Request failed (${resp.status})`);
+    }
+    return resp.json();
+  }
+
+  async function fetchAudioSimilar(url, exclude = []) {
+    const resp = await fetch("/api/similar/audio", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, limit: 50, weights: getWeights(), exclude }),
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      throw new Error(data.detail || `Request failed (${resp.status})`);
+    }
+    return resp.json();
+  }
+
+  // --- Tag filter chips ---
+  function addChipListeners(chip, tag) {
+    chip.addEventListener("click", () => {
+      if (selectedTags.has(tag)) {
+        selectedTags.delete(tag);
+        chip.classList.remove("active");
+      } else {
+        selectedTags.add(tag);
+        chip.classList.add("active");
+      }
+      softFiltering = false;
+      renderFiltered();
+    });
+  }
+
   function buildFilters() {
-    // Collect all unique tags across seed + result tracks
     const tagCounts = {};
     for (const tag of seedTags) {
-      tagCounts[tag] = (tagCounts[tag] || 0) + 5; // boost seed tags
+      tagCounts[tag] = (tagCounts[tag] || 0) + 5;
     }
     for (const t of allTracks) {
-      for (const tag of (t.tags || [])) {
+      for (const tag of t.tags || []) {
         tagCounts[tag] = (tagCounts[tag] || 0) + 1;
       }
     }
 
-    // Sort by frequency, take top 30
-    const sortedTags = Object.entries(tagCounts)
+    const allPoolTags = Object.keys(tagCounts);
+    const top30 = Object.entries(tagCounts)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 30)
       .map(([tag]) => tag);
 
-    // BPM filter: only show if seed has BPM
+    const sortedTags = [...new Set([...top30, ...selectedTags].filter((t) => t in tagCounts))];
+
     if (seedTrack && seedTrack.bpm) {
       bpmFilter.classList.remove("hidden");
       bpmSlider.value = 100;
@@ -120,26 +409,55 @@
       bpmFilter.classList.add("hidden");
     }
 
-    // Tag chips
     if (sortedTags.length > 0) {
       tagFilter.classList.remove("hidden");
-      tagChips.innerHTML = "";
-      for (const tag of sortedTags) {
-        const chip = document.createElement("button");
-        chip.type = "button";
-        chip.className = "tag-chip";
-        chip.textContent = tag;
-        chip.addEventListener("click", () => {
-          if (selectedTags.has(tag)) {
-            selectedTags.delete(tag);
-            chip.classList.remove("active");
-          } else {
-            selectedTags.add(tag);
-            chip.classList.add("active");
-          }
+
+      quickFiltersEl.innerHTML = "";
+      for (const preset of QUICK_FILTERS) {
+        const matchingTags = allPoolTags.filter((st) =>
+          preset.tags.some((pt) => st.includes(pt) || pt.includes(st))
+        );
+        if (matchingTags.length === 0) continue;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "quick-filter-btn";
+        btn.textContent = preset.label;
+        btn.addEventListener("click", () => {
+          matchingTags.forEach((t) => selectedTags.add(t));
+          buildFilters();
           renderFiltered();
         });
-        tagChips.appendChild(chip);
+        quickFiltersEl.appendChild(btn);
+      }
+
+      const byCategory = { mood: [], genre: [], vocals_instrumentals: [], other: [] };
+      for (const tag of sortedTags) {
+        const cat = tagCategories[tag] || "genre";
+        (byCategory[cat] || byCategory.other).push(tag);
+      }
+
+      const categoryOrder = ["mood", "vocals_instrumentals", "genre", "other"];
+      tagSections.innerHTML = "";
+      for (const catKey of categoryOrder) {
+        const tagsInCat = byCategory[catKey];
+        if (tagsInCat.length === 0) continue;
+        const label = CATEGORY_LABELS[catKey] || "Other";
+        const section = document.createElement("div");
+        section.className = "tag-section";
+        section.innerHTML = `<label class="tag-section-label">${esc(label)}</label>`;
+        const chipsWrap = document.createElement("div");
+        chipsWrap.className = "tag-chips";
+        for (const tag of tagsInCat) {
+          const chip = document.createElement("button");
+          chip.type = "button";
+          chip.className = "tag-chip";
+          chip.textContent = tag;
+          if (selectedTags.has(tag)) chip.classList.add("active");
+          addChipListeners(chip, tag);
+          chipsWrap.appendChild(chip);
+        }
+        section.appendChild(chipsWrap);
+        tagSections.appendChild(section);
       }
     } else {
       tagFilter.classList.add("hidden");
@@ -148,42 +466,38 @@
     filterPanel.classList.remove("hidden");
   }
 
+  // --- Ranking ---
   function rankTracks() {
     const bpmTol = parseInt(bpmSlider.value, 10);
-    const hasBpmFilter = seedTrack && seedTrack.bpm && bpmTol < 100;
+    const hasBpmFilter = !softFiltering && seedTrack && seedTrack.bpm && bpmTol < 100;
     const hasTagFilter = selectedTags.size > 0;
 
     return allTracks
       .map((t) => {
         let score = t.match_score || 0;
 
-        // BPM scoring
         if (hasBpmFilter && t.bpm) {
           const pctDiff = (Math.abs(t.bpm - seedTrack.bpm) / seedTrack.bpm) * 100;
           if (bpmTol === 0) {
-            // Exact: only allow within 2%
             score *= pctDiff <= 2 ? 1.0 : 0;
           } else if (pctDiff > bpmTol) {
-            score = 0; // outside tolerance, filter out
+            score = 0;
           } else {
-            // Within tolerance: boost closer matches
             score *= 1 - (pctDiff / bpmTol) * 0.4;
           }
         }
 
-        // Tag scoring
-        if (hasTagFilter && t.tags && t.tags.length > 0) {
-          const trackTags = new Set(t.tags);
+        if (hasTagFilter) {
+          const trackTags = new Set(t.tags || []);
           let overlap = 0;
           for (const tag of selectedTags) {
             if (trackTags.has(tag)) overlap++;
           }
-          const tagRatio = overlap / selectedTags.size;
-          // Multiply by tag ratio (0 = no overlap → score halved; 1 = full overlap → unchanged)
-          score *= 0.5 + 0.5 * tagRatio;
-        } else if (hasTagFilter) {
-          // Track has no tags: penalize slightly
-          score *= 0.4;
+          if (overlap === 0) {
+            score *= softFiltering ? 0.5 : 0;
+          } else {
+            score *= overlap / selectedTags.size;
+          }
         }
 
         return { ...t, _score: score };
@@ -196,8 +510,10 @@
     const ranked = rankTracks();
     const shown = ranked.slice(0, displayLimit);
     renderResults(shown, ranked.length);
+    discoverMoreBtn.classList.toggle("hidden", shown.length === 0 || exhausted);
   }
 
+  // --- Badges ---
   function matchBadge(score) {
     if (score == null) return "";
     const pct = Math.round(score * 100);
@@ -209,23 +525,151 @@
     return `<span class="bpm-badge">${Math.round(bpm)} BPM</span>`;
   }
 
+  function audioFeatureBadges(af) {
+    if (!af) return "";
+    const badges = [];
+    for (const [key, label] of Object.entries(AUDIO_DIMENSION_LABELS)) {
+      const val = af[key];
+      if (val == null) continue;
+      const display = key === "tempo" ? Math.round(val) : Math.round(val * 100) + "%";
+      badges.push(`<span class="af-badge" title="${label}">${label} ${display}</span>`);
+    }
+    return badges.join("");
+  }
+
+  const SPOTIFY_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>`;
+
+  function extractSpotifyTrackId(value) {
+    if (!value || typeof value !== "string") return null;
+    if (value.startsWith("spotify:track:")) return value.split(":")[2] || null;
+    const match = value.match(/spotify\.com\/track\/([a-zA-Z0-9]+)/);
+    return match ? match[1] : null;
+  }
+
+  function getSpotifyTargets(spotifyUrl, spotifyId) {
+    const trackId = spotifyId || extractSpotifyTrackId(spotifyUrl);
+    if (!trackId) return { appUrl: spotifyUrl || "", webUrl: spotifyUrl || "" };
+    return {
+      appUrl: `spotify:track:${trackId}`,
+      webUrl: `https://open.spotify.com/track/${trackId}`,
+    };
+  }
+
+  function renderSpotifyLink(label, spotifyUrl, spotifyId) {
+    const { appUrl, webUrl } = getSpotifyTargets(spotifyUrl, spotifyId);
+    if (!appUrl && !webUrl) return esc(label);
+    return `<a class="spotify-open-link" href="${appUrl || webUrl}" data-web-url="${webUrl}" rel="noopener">${esc(label)}</a>`;
+  }
+
+  function spotifyBtn(url, spotifyId) {
+    const { appUrl, webUrl } = getSpotifyTargets(url, spotifyId);
+    if (!appUrl && !webUrl) return "";
+    return `<a class="spotify-btn spotify-open-link" href="${appUrl || webUrl}" data-web-url="${webUrl}" rel="noopener" title="Open in Spotify">${SPOTIFY_ICON}</a>`;
+  }
+
+  function bindSpotifyOpenLinks(container) {
+    container.querySelectorAll(".spotify-open-link").forEach((link) => {
+      link.addEventListener("click", (event) => {
+        const webUrl = link.dataset.webUrl;
+        if (!webUrl || link.href.startsWith("http")) return;
+        event.preventDefault();
+
+        let appOpened = false;
+        const markOpened = () => {
+          appOpened = true;
+          window.removeEventListener("blur", markOpened);
+          document.removeEventListener("visibilitychange", onVisibility);
+        };
+        const onVisibility = () => {
+          if (document.hidden) markOpened();
+        };
+
+        window.addEventListener("blur", markOpened);
+        document.addEventListener("visibilitychange", onVisibility);
+        window.location.href = link.getAttribute("href");
+        window.setTimeout(() => {
+          if (!appOpened) window.open(webUrl, "_blank", "noopener");
+          markOpened();
+        }, 900);
+      });
+    });
+  }
+
+  function queueSummaryText(data) {
+    const added = data?.added || 0;
+    const failed = data?.failed || 0;
+    if (failed > 0) {
+      return `Added ${added} track(s), failed ${failed}.`;
+    }
+    return `Added ${added} track(s) to your queue.`;
+  }
+
+  function queueErrorText(data, fallbackStatus) {
+    if (data?.detail) return data.detail;
+    if (Array.isArray(data?.errors) && data.errors.length > 0) {
+      return data.errors.map((e) => e?.reason || "Unknown queue error").join(" | ");
+    }
+    return `Failed (${fallbackStatus})`;
+  }
+
+  async function queueSingleTrack(uri, btn) {
+    if (!spotifyConnected) return;
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "...";
+    try {
+      const resp = await fetch("/api/spotify/queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ track_uris: [uri] }),
+      });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        throw new Error(queueErrorText(data, resp.status));
+      }
+      const data = await resp.json();
+      btn.textContent = data.failed ? "!" : "\u2713";
+      actionStatus.textContent = queueSummaryText(data);
+      setTimeout(() => { btn.textContent = original; }, 1200);
+    } catch (err) {
+      btn.textContent = "!";
+      actionStatus.textContent = err.message || "Could not add to queue.";
+      setTimeout(() => { btn.textContent = original; }, 1200);
+    } finally {
+      setTimeout(() => { btn.disabled = false; }, 150);
+    }
+  }
+
+  // --- Rendering ---
   function renderSeed(track) {
     const spotifyLink = track.spotify_url
-      ? `<a href="${track.spotify_url}" target="_blank" rel="noopener">${esc(track.name)}</a>`
+      ? renderSpotifyLink(track.name, track.spotify_url, track.spotify_id)
       : esc(track.name);
     const bpm = track.bpm ? `<span class="seed-bpm">${Math.round(track.bpm)} BPM</span>` : "";
+    const tagsHtml =
+      track.tags && track.tags.length > 0
+        ? `<div class="seed-tags">${track.tags.slice(0, 12).map((t) => `<span class="seed-tag">${esc(t)}</span>`).join("")}</div>`
+        : "";
+    const afHtml =
+      track.audio_features
+        ? `<div class="seed-audio-features">${audioFeatureBadges(track.audio_features)}</div>`
+        : "";
     seedEl.innerHTML = `
       ${track.album_art ? `<img src="${track.album_art}" alt="Album art" />` : ""}
       <div class="seed-meta">
-        <h2>${spotifyLink}</h2>
+        <h2>${spotifyLink} ${spotifyBtn(track.spotify_url, track.spotify_id)}</h2>
         <div class="artists">${esc(track.artists.join(", "))} &mdash; ${esc(track.album)}</div>
         ${bpm}
+        ${tagsHtml}
+        ${afHtml}
       </div>
     `;
     seedEl.classList.remove("hidden");
+    bindSpotifyOpenLinks(seedEl);
   }
 
   function renderResults(tracks, totalAvailable) {
+    visibleTracks = tracks;
     if (!tracks.length) {
       resultsEl.innerHTML = "<p>No tracks match your filters. Try loosening the constraints.</p>";
       return;
@@ -233,26 +677,52 @@
     const countNote = totalAvailable > tracks.length
       ? ` (showing ${tracks.length} of ${totalAvailable})`
       : ` (${tracks.length})`;
-    let html = `<h3>Similar Tracks${countNote}</h3>`;
-    tracks.forEach((t) => {
+    const approxNote = approximated
+      ? `<div class="approx-notice">Audio features estimated from tags (Spotify audio-features API unavailable for this app)</div>`
+      : "";
+    let html = `<h3>Similar Tracks${countNote}</h3>${approxNote}`;
+    tracks.forEach((t, idx) => {
       const previewBtn = t.preview_url
         ? `<button class="play-btn" data-url="${t.preview_url}" title="Preview">&#9654;</button>`
         : "";
       const nameLink = t.spotify_url
-        ? `<a href="${t.spotify_url}" target="_blank" rel="noopener">${esc(t.name)}</a>`
+        ? renderSpotifyLink(t.name, t.spotify_url, t.spotify_id)
         : esc(t.name);
+      const trackTags =
+        t.tags && t.tags.length > 0
+          ? `<div class="track-card-tags">${t.tags.slice(0, 6).map((tag) => `<span class="track-tag">${esc(tag)}</span>`).join("")}</div>`
+          : "";
+      const afHtml =
+        t.audio_features
+          ? `<div class="track-card-tags">${audioFeatureBadges(t.audio_features)}</div>`
+          : "";
+      const queueBtn =
+        spotifyConnected && t.spotify_id
+          ? `<button class="queue-btn" data-uri="spotify:track:${t.spotify_id}" title="Add to queue">+Q</button>`
+          : "";
+      const drillBtn =
+        t.spotify_url
+          ? `<button class="drill-btn" data-drill-idx="${idx}" title="Drill down with this track">Drill</button>`
+          : "";
       html += `
         <div class="track-card">
           ${t.album_art ? `<img src="${t.album_art}" alt="" />` : '<div class="img-placeholder"></div>'}
           <div class="track-info">
             <div class="name">${nameLink}</div>
             <div class="detail">${esc(t.artists.join(", "))}${t.album ? " &mdash; " + esc(t.album) : ""}</div>
+            ${trackTags}
+            ${afHtml}
           </div>
           <div class="track-badges">
             ${matchBadge(t.match_score)}
             ${bpmBadge(t.bpm)}
           </div>
-          ${previewBtn}
+          <div class="track-actions">
+            ${previewBtn}
+            ${queueBtn}
+            ${drillBtn}
+            ${spotifyBtn(t.spotify_url, t.spotify_id)}
+          </div>
         </div>
       `;
     });
@@ -261,8 +731,27 @@
     resultsEl.querySelectorAll(".play-btn").forEach((btn) => {
       btn.addEventListener("click", () => togglePreview(btn));
     });
+    resultsEl.querySelectorAll(".queue-btn").forEach((btn) => {
+      btn.addEventListener("click", () => queueSingleTrack(btn.dataset.uri, btn));
+    });
+    resultsEl.querySelectorAll(".drill-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const idx = parseInt(btn.dataset.drillIdx, 10);
+        const track = visibleTracks[idx];
+        if (!track) return;
+        traceHistory.push({
+          track,
+          tags: track.tags || [],
+          audioFeatures: track.audio_features || null,
+          bpm: track.bpm || null,
+        });
+        await runDrillSearch(track);
+      });
+    });
+    bindSpotifyOpenLinks(resultsEl);
   }
 
+  // --- Audio preview ---
   function togglePreview(btn) {
     const url = btn.dataset.url;
     if (currentAudio && currentAudio.src === url) {
@@ -295,4 +784,111 @@
     d.textContent = str;
     return d.innerHTML;
   }
+
+  // --- Spotify auth ---
+  async function checkSpotifyStatus() {
+    try {
+      const resp = await fetch("/api/spotify/status");
+      const data = await resp.json();
+      spotifyConnected = data.connected;
+      if (data.connected) {
+        spotifyLoginBtn.classList.add("hidden");
+        spotifyUserEl.textContent = data.user;
+        spotifyUserEl.classList.remove("hidden");
+        spotifyLogoutBtn.classList.remove("hidden");
+      } else {
+        spotifyLoginBtn.classList.remove("hidden");
+        spotifyUserEl.classList.add("hidden");
+        spotifyLogoutBtn.classList.add("hidden");
+      }
+      updateActionsBar();
+    } catch (_) { /* ignore */ }
+  }
+
+  function updateActionsBar() {
+    if (allTracks.length > 0 && spotifyConnected) {
+      actionsBar.classList.remove("hidden");
+    } else {
+      actionsBar.classList.add("hidden");
+    }
+  }
+
+  spotifyLoginBtn.addEventListener("click", () => {
+    window.location.href = "/api/spotify/login";
+  });
+
+  spotifyLogoutBtn.addEventListener("click", async () => {
+    await fetch("/api/spotify/logout", { method: "POST" });
+    spotifyConnected = false;
+    spotifyLoginBtn.classList.remove("hidden");
+    spotifyUserEl.classList.add("hidden");
+    spotifyLogoutBtn.classList.add("hidden");
+    updateActionsBar();
+  });
+
+  function getFilteredTrackUris() {
+    const ranked = rankTracks().slice(0, displayLimit);
+    return ranked
+      .filter((t) => t.spotify_id)
+      .map((t) => `spotify:track:${t.spotify_id}`);
+  }
+
+  savePlaylistBtn.addEventListener("click", async () => {
+    const uris = getFilteredTrackUris();
+    if (uris.length === 0) {
+      actionStatus.textContent = "No Spotify tracks in current results.";
+      return;
+    }
+    const name = seedTrack
+      ? `Similar to ${seedTrack.name} - ${seedTrack.artists[0]}`
+      : "Similar Tracks";
+    actionStatus.textContent = "Creating playlist...";
+    savePlaylistBtn.disabled = true;
+    try {
+      const resp = await fetch("/api/spotify/playlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, track_uris: uris }),
+      });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        throw new Error(data.detail || `Failed (${resp.status})`);
+      }
+      const data = await resp.json();
+      actionStatus.innerHTML = `Playlist created! <a href="${data.playlist_url}" target="_blank" rel="noopener">Open in Spotify</a>`;
+    } catch (err) {
+      actionStatus.textContent = err.message;
+    } finally {
+      savePlaylistBtn.disabled = false;
+    }
+  });
+
+  addQueueBtn.addEventListener("click", async () => {
+    const uris = getFilteredTrackUris();
+    if (uris.length === 0) {
+      actionStatus.textContent = "No Spotify tracks in current results.";
+      return;
+    }
+    actionStatus.textContent = "Adding to queue...";
+    addQueueBtn.disabled = true;
+    try {
+      const resp = await fetch("/api/spotify/queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ track_uris: uris }),
+      });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        throw new Error(queueErrorText(data, resp.status));
+      }
+      const data = await resp.json();
+      actionStatus.textContent = queueSummaryText(data);
+    } catch (err) {
+      actionStatus.textContent = err.message;
+    } finally {
+      addQueueBtn.disabled = false;
+    }
+  });
+
+  checkSpotifyStatus();
 })();

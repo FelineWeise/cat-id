@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+.venv
+__pycache__/
+*.pyc
+.cache
+key.pem
+cert.pem
+Untitled

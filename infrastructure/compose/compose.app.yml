@@ -1,0 +1,16 @@
+services:
+  cat-id:
+    image: ${CAT_ID_IMAGE:-ghcr.io/felineweise/cat-id:latest}
+    container_name: cat-id-app
+    restart: unless-stopped
+    env_file:
+      - ./env/production.env
+    expose:
+      - "8000"
+    networks:
+      - cat-id-net
+
+networks:
+  cat-id-net:
+    name: cat-id-net
+    driver: bridge

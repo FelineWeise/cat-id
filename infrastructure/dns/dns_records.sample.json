@@ -1,0 +1,13 @@
+{
+  "dns_zone": "cat-id.eu",
+  "changes": [
+    {
+      "action": "add",
+      "record": { "name": "", "type": "A", "data": "51.15.207.5", "ttl": 300 }
+    },
+    {
+      "action": "add",
+      "record": { "name": "app", "type": "A", "data": "51.15.207.5", "ttl": 300 }
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "similar-tracks"
+name = "cat-id"
 version = "1.0.0"
 description = "Find songs similar to a given Spotify track using Last.fm collaborative filtering"
 authors = ["FelineWeise"]
