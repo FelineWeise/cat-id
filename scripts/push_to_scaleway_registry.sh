@@ -42,11 +42,11 @@ fi
 
 FULL_IMAGE="${REGISTRY_HOST}/${SCW_REGISTRY_NAMESPACE}/${SCW_IMAGE_NAME}:${TAG}"
 
-echo "Building image..."
-docker build -t cat-id:build "${REPO_ROOT}"
+echo "Building image for linux/amd64 (Scaleway instances are x86_64)..."
+docker build --platform linux/amd64 -t cat-id:build "${REPO_ROOT}"
 
-echo "Logging in to ${REGISTRY_HOST}..."
-printf '%s' "${SCW_SECRET_KEY}" | docker login "${REGISTRY_HOST}" -u nologin --password-stdin
+echo "Logging in to ${REGISTRY_HOST}/${SCW_REGISTRY_NAMESPACE}..."
+printf '%s' "${SCW_SECRET_KEY}" | docker login "${REGISTRY_HOST}/${SCW_REGISTRY_NAMESPACE}" -u nologin --password-stdin
 
 echo "Tagging ${FULL_IMAGE}..."
 docker tag cat-id:build "${FULL_IMAGE}"

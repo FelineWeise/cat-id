@@ -32,12 +32,41 @@ This folder is the **runtime contract** for cat-id on the **LAED base VM**: Comp
    docker compose up -d
    ```
 
-**Registry login:** If LAED cloud-init already wrote Docker credentials for Scaleway CR, `docker compose pull` works as root with that config. Otherwise `docker login rg.fr-par.scw.cloud` (or your region endpoint) once.
+   **Default layout (LAED shares the host):** only the **app** container runs. It listens on **`127.0.0.1:18008`** → **`8000`** inside the container. Add this site (or equivalent) to **LAED’s** Caddy config, then reload LAED Caddy:
+
+   ```caddyfile
+   app.cat-id.eu {
+     encode zstd gzip
+     reverse_proxy 127.0.0.1:18008
+   }
+   ```
+
+   **Standalone VPS** (nothing else on 80/443):  
+   `docker compose --profile standalone-tls up -d`  
+   and use the bundled **`Caddyfile`** in this folder instead.
+
+**Registry login:** If LAED cloud-init already wrote Docker credentials for Scaleway CR, `docker compose pull` works as root with that config. Otherwise:
+
+```bash
+printf '%s' "$SCW_SECRET_KEY" | docker login rg.fr-par.scw.cloud/cat-id -u nologin --password-stdin
+```
+
+(Use your namespace path; secret key, not access key id.)
+
+## Image CPU architecture
+
+Scaleway **GP/General** instances are **amd64**. Build and push from a Mac with:
+
+```bash
+./scripts/push_to_scaleway_registry.sh v1.0.1
+```
+
+(the script uses `docker build --platform linux/amd64`).
 
 ## Ports and Caddy
 
-- This stack publishes **80** and **443** for Caddy.
-- If LAED already terminates TLS on those ports, **do not** run this Caddy: use **`compose.app.yml`** from [`../compose/`](../compose/) (app only) and add **`app.cat-id.eu`** to **LAED’s** edge proxy, or merge the `reverse_proxy` block into LAED’s Caddyfile.
+- **Shared LAED host:** do **not** use the bundled Caddy (profile `standalone-tls` off). Proxy from **LAED** to **`127.0.0.1:18008`**.
+- **Dedicated host:** `docker compose --profile standalone-tls up -d` to use **80/443** here.
 
 ## Isolation on a shared host
 

@@ -1,16 +1,21 @@
 # Production on LAED base host: image-only (Scaleway Container Registry). No build: here.
-# Place this directory (or these files) on the server, e.g. /opt/cat-id-data, then:
-#   export CAT_ID_IMAGE=rg.<region>.scw.cloud/<namespace>/app:<tag>
-#   docker compose pull && docker compose up -d
+# Default: app only, bound to loopback for LAED's Caddy (80/443 already in use).
+#   docker compose up -d
+# Optional second Caddy on this host (empty VPS / free 80+443):
+#   docker compose --profile standalone-tls up -d
+# Build images on Apple Silicon with: docker build --platform linux/amd64
 # Registry auth: reuse /root/.docker/config.json from LAED cloud-init if present.
 
 services:
   cat-id:
     image: ${CAT_ID_IMAGE:-rg.fr-par.scw.cloud/cat-id/app:latest}
+    platform: linux/amd64
     container_name: cat-id-app
     restart: unless-stopped
     env_file:
       - ./production.env
+    ports:
+      - "127.0.0.1:18008:8000"
     expose:
       - "8000"
     networks:
@@ -20,6 +25,8 @@ services:
     image: caddy:2-alpine
     container_name: cat-id-caddy
     restart: unless-stopped
+    profiles:
+      - standalone-tls
     ports:
       - "80:80"
       - "443:443"
