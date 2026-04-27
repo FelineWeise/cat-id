@@ -135,9 +135,28 @@ def get_track_info(url_or_uri: str) -> TrackInfo:
     return _track_to_info(sp.track(track_id))
 
 
-def search_track(artist: str, track_name: str) -> TrackInfo | None:
-    """Resolve a Spotify track by artist + name via multi-pass matching."""
-    return _search_track_cached(artist.strip().lower(), track_name.strip().lower())
+def search_track(artist: str, track_name: str, isrc: str | None = None) -> TrackInfo | None:
+    """Resolve a Spotify track via ISRC-first, then multi-pass text matching."""
+    artist_norm = artist.strip().lower()
+    track_norm = track_name.strip().lower()
+    isrc_norm = isrc.strip().upper() if isrc else ""
+    if isrc_norm:
+        by_isrc = _search_track_by_isrc_cached(isrc_norm)
+        if by_isrc is not None:
+            return by_isrc
+    return _search_track_cached(artist_norm, track_norm)
+
+
+@lru_cache(maxsize=1024)
+def _search_track_by_isrc_cached(isrc: str) -> TrackInfo | None:
+    if not isrc or not spotify_mapping_allowed():
+        return None
+
+    sp = get_spotify_client()
+    items = _run_search_with_retry(sp, query=f"isrc:{isrc}", limit=1)
+    if not items:
+        return None
+    return _track_to_info(items[0])
 
 
 @lru_cache(maxsize=1024)

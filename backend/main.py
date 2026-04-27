@@ -186,6 +186,8 @@ async def _enrich_lastfm(
 
         async with semaphore:
             try:
+                dz_info = await deezer_fetch(client, artist_name, track_name)
+                candidate_isrc = dz_info.get("isrc") if isinstance(dz_info, dict) else None
                 mapping_allowed = (
                     mapping_attempted < MAPPING_ENRICH_LIMIT
                     and spotify_mapping_allowed()
@@ -193,7 +195,7 @@ async def _enrich_lastfm(
                 )
                 if mapping_allowed:
                     mapping_attempted += 1
-                    sp_track_task = asyncio.to_thread(search_track, artist_name, track_name)
+                    sp_track = await asyncio.to_thread(search_track, artist_name, track_name, candidate_isrc)
                 else:
                     if mapping_attempted >= MAPPING_ENRICH_LIMIT:
                         mapping_degraded_reason = "mapping_limit_reached"
@@ -201,11 +203,7 @@ async def _enrich_lastfm(
                         mapping_degraded_reason = "spotify_mapping_rate_limited"
                     elif time.monotonic() >= enrich_deadline:
                         mapping_degraded_reason = "enrich_time_budget_exceeded"
-                    sp_track_task = asyncio.sleep(0, result=None)
-                sp_track, dz_info = await asyncio.gather(
-                    sp_track_task,
-                    deezer_fetch(client, artist_name, track_name),
-                )
+                    sp_track = None
                 tags: list[str] = []
                 if include_tags and time.monotonic() < enrich_deadline:
                     tags = await fetch_track_tags(client, artist_name, track_name)
