@@ -10,6 +10,14 @@ class TrackRequest(BaseModel):
         default_factory=list,
         description="Lowercased 'artist::trackname' keys to exclude from results",
     )
+    strict_mapped_only: bool = Field(
+        default=True,
+        description="If true, only Spotify-mapped tracks are returned (queue/playlist-safe).",
+    )
+    use_metadata_fallback: bool = Field(
+        default=True,
+        description="If true, retry Spotify resolution using free MusicBrainz hints when direct mapping fails.",
+    )
 
 
 class AudioFeatures(BaseModel):
@@ -42,6 +50,14 @@ class AudioSimilarRequest(BaseModel):
         default_factory=list,
         description="Lowercased 'artist::trackname' keys to exclude from results",
     )
+    strict_mapped_only: bool = Field(
+        default=True,
+        description="If true, only Spotify-mapped tracks are returned (queue/playlist-safe).",
+    )
+    use_metadata_fallback: bool = Field(
+        default=True,
+        description="If true, retry Spotify resolution using free MusicBrainz hints when direct mapping fails.",
+    )
 
 
 class TrackInfo(BaseModel):
@@ -62,6 +78,10 @@ class TrackInfo(BaseModel):
 class SimilarTracksResponse(BaseModel):
     seed_track: TrackInfo
     similar_tracks: list[TrackInfo]
+    strict_mapped_only: bool = Field(
+        default=False,
+        description="Echo of request: results are Spotify-mapped only when true.",
+    )
     seed_tags: list[str] = Field(default_factory=list)
     total_candidates: int = Field(
         default=0,

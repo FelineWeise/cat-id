@@ -135,8 +135,8 @@ def get_track_info(url_or_uri: str) -> TrackInfo:
     return _track_to_info(sp.track(track_id))
 
 
-def search_track(artist: str, track_name: str, isrc: str | None = None) -> TrackInfo | None:
-    """Resolve a Spotify track via ISRC-first, then multi-pass text matching."""
+def resolve_spotify_track(artist: str, track_name: str, isrc: str | None = None) -> TrackInfo | None:
+    """Resolve a catalog track to Spotify: ISRC-first, then multi-pass text matching."""
     artist_norm = artist.strip().lower()
     track_norm = track_name.strip().lower()
     isrc_norm = isrc.strip().upper() if isrc else ""
@@ -145,6 +145,11 @@ def search_track(artist: str, track_name: str, isrc: str | None = None) -> Track
         if by_isrc is not None:
             return by_isrc
     return _search_track_cached(artist_norm, track_norm)
+
+
+def search_track(artist: str, track_name: str, isrc: str | None = None) -> TrackInfo | None:
+    """Backward-compatible alias for :func:`resolve_spotify_track`."""
+    return resolve_spotify_track(artist, track_name, isrc)
 
 
 @lru_cache(maxsize=1024)

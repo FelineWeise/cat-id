@@ -50,6 +50,7 @@
   let mappedCount = 0;
   let unmappedCount = 0;
   let mappingDegradedReason = null;
+  let strictMappedOnly = true;
   let activeRequestId = 0;
   let activeController = null;
   let isRequestInFlight = false;
@@ -193,6 +194,7 @@
       mappedCount = data.mapped_count || 0;
       unmappedCount = data.unmapped_count || 0;
       mappingDegradedReason = data.mapping_degraded_reason || null;
+      strictMappedOnly = data.strict_mapped_only !== false;
       addToSeen(allTracks);
       softFiltering = false;
       buildFilters();
@@ -376,6 +378,7 @@
       mappedCount = data.mapped_count || 0;
       unmappedCount = data.unmapped_count || 0;
       mappingDegradedReason = data.mapping_degraded_reason || null;
+      strictMappedOnly = data.strict_mapped_only !== false;
       addToSeen(allTracks);
       renderSeed(seedTrack);
       buildFilters();
@@ -427,6 +430,7 @@
     mappedCount = 0;
     unmappedCount = 0;
     mappingDegradedReason = null;
+    strictMappedOnly = true;
     selectedTags.clear();
     seenTrackKeys.clear();
     exhausted = false;
@@ -451,6 +455,7 @@
       mappedCount = data.mapped_count || 0;
       unmappedCount = data.unmapped_count || 0;
       mappingDegradedReason = data.mapping_degraded_reason || null;
+      strictMappedOnly = data.strict_mapped_only !== false;
       addToSeen(allTracks);
 
       renderSeed(seedTrack);
@@ -499,7 +504,13 @@
     const resp = await fetch("/api/similar", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, limit, exclude }),
+      body: JSON.stringify({
+        url,
+        limit,
+        exclude,
+        strict_mapped_only: true,
+        use_metadata_fallback: true,
+      }),
       signal: request?.signal,
     });
     if (!resp.ok) {
@@ -514,7 +525,14 @@
     const resp = await fetch("/api/similar/audio", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, limit, weights: getWeights(), exclude }),
+      body: JSON.stringify({
+        url,
+        limit,
+        weights: getWeights(),
+        exclude,
+        strict_mapped_only: true,
+        use_metadata_fallback: true,
+      }),
       signal: request?.signal,
     });
     if (!resp.ok) {
@@ -1001,7 +1019,11 @@
       savePlaylistBtn.disabled = isRequestInFlight;
       addQueueBtn.disabled = isRequestInFlight;
       const degradeNote = mappingDegradedReason ? ` (${mappingDegradedReason.replaceAll("_", " ")})` : "";
-      actionStatus.textContent = `${mappedCount}/${mappedCount + unmappedCount} tracks mapped to Spotify${degradeNote}. Queue/playlist use mapped tracks only.`;
+      if (strictMappedOnly) {
+        actionStatus.textContent = `${mappedCount} Spotify-ready track(s) (strict)${degradeNote}. Queue/playlist include every listed track.`;
+      } else {
+        actionStatus.textContent = `${mappedCount}/${mappedCount + unmappedCount} tracks mapped to Spotify${degradeNote}. Queue/playlist use mapped tracks only.`;
+      }
     } else {
       actionsBar.classList.add("hidden");
     }

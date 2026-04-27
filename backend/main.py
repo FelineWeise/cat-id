@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend.deezer import fetch_track_info as deezer_fetch
+from backend.metadata_fallback import fetch_musicbrainz_hints
 from backend.config import (
     ALLOWED_ORIGINS,
     APP_BASE_URL,
@@ -34,7 +35,7 @@ from backend.spotify import (
     get_audio_features,
     get_recommendations,
     get_track_info,
-    search_track,
+    resolve_spotify_track,
     spotify_mapping_allowed,
 )
 from backend.spotify_auth import (
@@ -74,7 +75,9 @@ MIN_FETCH_MULTIPLIER = 2
 MAX_FETCH_MULTIPLIER = 3
 FULL_TAG_ENRICH_LIMIT = 25
 ENRICH_TIME_BUDGET_SECONDS = 12.0
-MAPPING_ENRICH_LIMIT = 40
+SPOTIFY_RESOLVE_BUDGET = 72
+MB_FALLBACK_CAP = 28
+STRICT_MAPPED_FETCH_MULT = 5
 SPOTIFY_ENRICH_SEED_WEIGHT = 0.7
 TAG_ALIGNMENT_WEIGHT = 0.25
 DEEZER_SIGNAL_WEIGHT = 0.05
@@ -82,6 +85,48 @@ DEEZER_SIGNAL_WEIGHT = 0.05
 logger = logging.getLogger(__name__)
 _shared_http_client: httpx.AsyncClient | None = None
 session_store = build_session_store(SESSION_STORE_BACKEND, REDIS_URL)
+
+
+def _listener_fetch_limit(limit: int, strict_mapped_only: bool) -> int:
+    """How many Last.fm candidates to pull before enrichment (strict mode needs more raw rows)."""
+    if strict_mapped_only:
+        return min(
+            MAX_OVERFETCH_LIMIT,
+            max(limit * STRICT_MAPPED_FETCH_MULT, limit * BASE_OVERFETCH_FACTOR),
+        )
+    return min(MAX_OVERFETCH_LIMIT, max(limit, limit * BASE_OVERFETCH_FACTOR))
+
+
+def _build_similar_response(
+    *,
+    seed: TrackInfo,
+    similar_ranked: list[TrackInfo],
+    limit: int,
+    strict_mapped_only: bool,
+    seed_tags: list[str],
+    tag_categories: dict[str, str],
+    mapping_degraded_reason: str | None = None,
+    approximated: bool = False,
+) -> SimilarTracksResponse:
+    """Slice ranked results; when strict_mapped_only, drop tracks without Spotify IDs."""
+    total_candidates = len(similar_ranked)
+    if strict_mapped_only:
+        filtered = [t for t in similar_ranked if t.spotify_id][:limit]
+    else:
+        filtered = similar_ranked[:limit]
+    mapped_count, unmapped_count = _mapping_summary(filtered)
+    return SimilarTracksResponse(
+        seed_track=seed,
+        similar_tracks=filtered,
+        strict_mapped_only=strict_mapped_only,
+        total_candidates=total_candidates,
+        mapped_count=mapped_count,
+        unmapped_count=unmapped_count,
+        mapping_degraded_reason=mapping_degraded_reason,
+        seed_tags=seed_tags,
+        tag_categories=tag_categories,
+        approximated=approximated,
+    )
 
 
 def _get_http_client() -> httpx.AsyncClient:
@@ -120,7 +165,11 @@ async def shutdown_clients() -> None:
 
 
 async def _enrich_lastfm(
-    seed: TrackInfo, limit: int, exclude: set[str] | None = None,
+    seed: TrackInfo,
+    limit: int,
+    exclude: set[str] | None = None,
+    *,
+    use_metadata_fallback: bool = True,
 ) -> tuple[list[TrackInfo], list[str], str | None]:
     """Shared Last.fm pipeline: fetch similar tracks, enrich with Spotify/Deezer/tags.
 
@@ -175,11 +224,13 @@ async def _enrich_lastfm(
     semaphore = asyncio.Semaphore(MAX_ENRICH_CONCURRENCY)
     enrich_deadline = time.monotonic() + ENRICH_TIME_BUDGET_SECONDS
     mapping_degraded_reason: str | None = None
-    mapping_attempted = 0
+    mapping_calls = 0
+    mb_fallback_used = 0
 
     async def enrich(item: dict, include_tags: bool) -> TrackInfo | None:
         nonlocal mapping_degraded_reason
-        nonlocal mapping_attempted
+        nonlocal mapping_calls
+        nonlocal mb_fallback_used
         artist_name = item["artist"]
         track_name = item["name"]
         match_score = item["match"]
@@ -189,21 +240,56 @@ async def _enrich_lastfm(
                 dz_info = await deezer_fetch(client, artist_name, track_name)
                 candidate_isrc = dz_info.get("isrc") if isinstance(dz_info, dict) else None
                 mapping_allowed = (
-                    mapping_attempted < MAPPING_ENRICH_LIMIT
+                    mapping_calls < SPOTIFY_RESOLVE_BUDGET
                     and spotify_mapping_allowed()
                     and time.monotonic() < enrich_deadline
                 )
+                sp_track = None
                 if mapping_allowed:
-                    mapping_attempted += 1
-                    sp_track = await asyncio.to_thread(search_track, artist_name, track_name, candidate_isrc)
+                    mapping_calls += 1
+                    sp_track = await asyncio.to_thread(
+                        resolve_spotify_track, artist_name, track_name, candidate_isrc,
+                    )
                 else:
-                    if mapping_attempted >= MAPPING_ENRICH_LIMIT:
+                    if mapping_calls >= SPOTIFY_RESOLVE_BUDGET:
                         mapping_degraded_reason = "mapping_limit_reached"
                     elif not spotify_mapping_allowed():
                         mapping_degraded_reason = "spotify_mapping_rate_limited"
                     elif time.monotonic() >= enrich_deadline:
                         mapping_degraded_reason = "enrich_time_budget_exceeded"
-                    sp_track = None
+
+                if (
+                    sp_track is None
+                    and use_metadata_fallback
+                    and mb_fallback_used < MB_FALLBACK_CAP
+                    and time.monotonic() < enrich_deadline
+                    and spotify_mapping_allowed()
+                ):
+                    hints = await fetch_musicbrainz_hints(
+                        client, artist_name, track_name, candidate_isrc,
+                    )
+                    mb_fallback_used += 1
+                    hint_isrc, hint_artist, hint_title = hints
+                    if (
+                        any(h is not None for h in hints)
+                        and mapping_calls < SPOTIFY_RESOLVE_BUDGET
+                        and _should_retry_spotify_resolve(
+                            artist_name,
+                            track_name,
+                            candidate_isrc,
+                            hint_isrc,
+                            hint_artist,
+                            hint_title,
+                        )
+                    ):
+                        mapping_calls += 1
+                        sp_track = await asyncio.to_thread(
+                            resolve_spotify_track,
+                            hint_artist or artist_name,
+                            hint_title or track_name,
+                            hint_isrc or candidate_isrc,
+                        )
+
                 tags: list[str] = []
                 if include_tags and time.monotonic() < enrich_deadline:
                     tags = await fetch_track_tags(client, artist_name, track_name)
@@ -281,6 +367,26 @@ def _mapping_summary(tracks: Sequence[TrackInfo]) -> tuple[int, int]:
     return mapped, max(0, len(tracks) - mapped)
 
 
+def _should_retry_spotify_resolve(
+    artist_name: str,
+    track_name: str,
+    candidate_isrc: str | None,
+    hint_isrc: str | None,
+    hint_artist: str | None,
+    hint_title: str | None,
+) -> bool:
+    """True if MusicBrainz hints differ enough to justify a second Spotify lookup."""
+    if hint_isrc:
+        cur = candidate_isrc.strip().upper() if candidate_isrc else ""
+        if not cur or hint_isrc.strip().upper() != cur:
+            return True
+    if hint_artist and hint_artist.strip().lower() != artist_name.strip().lower():
+        return True
+    if hint_title and hint_title.strip().lower() != track_name.strip().lower():
+        return True
+    return False
+
+
 @app.post("/api/similar", response_model=SimilarTracksResponse)
 async def api_similar(req: TrackRequest):
     try:
@@ -291,9 +397,11 @@ async def api_similar(req: TrackRequest):
         raise HTTPException(status_code=502, detail=f"Spotify API error: {exc}")
 
     exclude = set(req.exclude) if req.exclude else None
-    fetch_limit = min(MAX_OVERFETCH_LIMIT, max(req.limit, req.limit * BASE_OVERFETCH_FACTOR))
+    fetch_limit = _listener_fetch_limit(req.limit, req.strict_mapped_only)
     try:
-        similar, seed_tags, mapping_degraded_reason = await _enrich_lastfm(seed, fetch_limit, exclude)
+        similar, seed_tags, mapping_degraded_reason = await _enrich_lastfm(
+            seed, fetch_limit, exclude, use_metadata_fallback=req.use_metadata_fallback,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -305,17 +413,14 @@ async def api_similar(req: TrackRequest):
     tag_categories = build_tag_categories(list(all_tags))
 
     similar.sort(key=_fused_rank_value, reverse=True)
-    limited = similar[: req.limit]
-    mapped_count, unmapped_count = _mapping_summary(limited)
-    return SimilarTracksResponse(
-        seed_track=seed,
-        similar_tracks=limited,
-        total_candidates=len(similar),
-        mapped_count=mapped_count,
-        unmapped_count=unmapped_count,
-        mapping_degraded_reason=mapping_degraded_reason,
+    return _build_similar_response(
+        seed=seed,
+        similar_ranked=similar,
+        limit=req.limit,
+        strict_mapped_only=req.strict_mapped_only,
         seed_tags=seed_tags,
         tag_categories=tag_categories,
+        mapping_degraded_reason=mapping_degraded_reason,
     )
 
 
@@ -375,7 +480,13 @@ async def _audio_spotify_path(
         raise HTTPException(status_code=502, detail=f"Recommendations error: {exc}")
 
     if not candidates:
-        return SimilarTracksResponse(seed_track=seed, similar_tracks=[], mapped_count=0, unmapped_count=0)
+        return SimilarTracksResponse(
+            seed_track=seed,
+            similar_tracks=[],
+            strict_mapped_only=req.strict_mapped_only,
+            mapped_count=0,
+            unmapped_count=0,
+        )
 
     candidate_ids = [t.spotify_id for t in candidates if t.spotify_id]
     try:
@@ -393,14 +504,13 @@ async def _audio_spotify_path(
             track.match_score = 0.0
 
     candidates.sort(key=lambda t: t.match_score or 0, reverse=True)
-    limited = candidates[: req.limit]
-    mapped_count, unmapped_count = _mapping_summary(limited)
-    return SimilarTracksResponse(
-        seed_track=seed,
-        similar_tracks=limited,
-        total_candidates=len(candidates),
-        mapped_count=mapped_count,
-        unmapped_count=unmapped_count,
+    return _build_similar_response(
+        seed=seed,
+        similar_ranked=candidates,
+        limit=req.limit,
+        strict_mapped_only=req.strict_mapped_only,
+        seed_tags=[],
+        tag_categories={},
     )
 
 
@@ -409,9 +519,11 @@ async def _audio_fallback_path(
 ) -> SimilarTracksResponse:
     """Fallback: Last.fm candidates + tag-estimated features + weighted scoring."""
     exclude = set(req.exclude) if req.exclude else None
-    fetch_limit = min(MAX_OVERFETCH_LIMIT, max(req.limit, req.limit * BASE_OVERFETCH_FACTOR))
+    fetch_limit = _listener_fetch_limit(req.limit, req.strict_mapped_only)
     try:
-        similar, seed_tags, mapping_degraded_reason = await _enrich_lastfm(seed, fetch_limit, exclude)
+        similar, seed_tags, mapping_degraded_reason = await _enrich_lastfm(
+            seed, fetch_limit, exclude, use_metadata_fallback=req.use_metadata_fallback,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -431,17 +543,14 @@ async def _audio_fallback_path(
     for t in similar:
         all_tags.update(t.tags or [])
 
-    limited = similar[: req.limit]
-    mapped_count, unmapped_count = _mapping_summary(limited)
-    return SimilarTracksResponse(
-        seed_track=seed,
-        similar_tracks=limited,
-        total_candidates=len(similar),
-        mapped_count=mapped_count,
-        unmapped_count=unmapped_count,
-        mapping_degraded_reason=mapping_degraded_reason,
+    return _build_similar_response(
+        seed=seed,
+        similar_ranked=similar,
+        limit=req.limit,
+        strict_mapped_only=req.strict_mapped_only,
         seed_tags=seed_tags,
         tag_categories=build_tag_categories(list(all_tags)),
+        mapping_degraded_reason=mapping_degraded_reason,
         approximated=True,
     )
 
