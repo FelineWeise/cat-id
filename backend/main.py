@@ -176,9 +176,10 @@ async def _enrich_lastfm(
 
         async with semaphore:
             try:
-                sp_track_task = asyncio.to_thread(search_track, artist_name, track_name)
                 if not spotify_search_allowed() or time.monotonic() >= enrich_deadline:
                     sp_track_task = asyncio.sleep(0, result=None)
+                else:
+                    sp_track_task = asyncio.to_thread(search_track, artist_name, track_name)
                 sp_track, dz_info = await asyncio.gather(
                     sp_track_task,
                     deezer_fetch(client, artist_name, track_name),
