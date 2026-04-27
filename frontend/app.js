@@ -47,6 +47,13 @@
   let softFiltering = false;
   let traceHistory = [];
   let visibleTracks = [];
+  let mappedCount = 0;
+  let unmappedCount = 0;
+  let mappingDegradedReason = null;
+  let activeRequestId = 0;
+  let activeController = null;
+  let isRequestInFlight = false;
+  let lastSeedKey = "";
 
   const discoverMoreBtn = document.getElementById("discover-more-btn");
 
@@ -145,7 +152,12 @@
     await search();
   });
   reloadBtn.addEventListener("click", async () => {
-    await search({ preserveTrace: true });
+    if (traceHistory.length > 0) {
+      const pivot = traceHistory[traceHistory.length - 1];
+      await runDrillSearch(pivot.track, { keepTrace: true });
+      return;
+    }
+    await search();
   });
 
   bpmSlider.addEventListener("input", () => {
@@ -162,20 +174,25 @@
       let data;
       const url = urlInput.value.trim();
       const excludeList = [...seenTrackKeys];
+      const request = beginRequest();
       if (currentMode === "audio") {
-        data = await fetchAudioSimilar(url, excludeList);
+        data = await fetchAudioSimilar(url, excludeList, request);
       } else {
-        data = await fetchLastfmSimilar(url, excludeList);
+        data = await fetchLastfmSimilar(url, excludeList, request);
       }
+      if (!isCurrentRequest(request.requestId)) return;
       if (data.similar_tracks.length === 0) {
         exhausted = true;
         renderFiltered();
         return;
       }
-      allTracks = data.similar_tracks;
+      allTracks = mergeTracksByKey(allTracks, data.similar_tracks);
       seedTags = data.seed_tags || seedTags;
       tagCategories = data.tag_categories || tagCategories;
       approximated = data.approximated || false;
+      mappedCount = data.mapped_count || 0;
+      unmappedCount = data.unmapped_count || 0;
+      mappingDegradedReason = data.mapping_degraded_reason || null;
       addToSeen(allTracks);
       softFiltering = false;
       buildFilters();
@@ -185,11 +202,15 @@
       renderFiltered();
       updateActionsBar();
     } catch (err) {
-      errorEl.textContent = err.message;
-      errorEl.classList.remove("hidden");
+      if (err.name !== "AbortError") {
+        errorEl.textContent = err.message;
+        errorEl.classList.remove("hidden");
+      }
     } finally {
+      endRequest();
       discoverMoreBtn.disabled = false;
       discoverMoreBtn.textContent = "Discover More";
+      updateActionsBar();
     }
   });
 
@@ -330,46 +351,68 @@
     return typeof v === "number" ? `${Math.round(v)}` : "-";
   }
 
-  async function runDrillSearch(track) {
+  async function runDrillSearch(track, options = {}) {
+    const { keepTrace = false } = options;
     if (!track || !track.spotify_url) return;
     const avg = averageFeatures(traceHistory);
     const interTags = intersectTags(traceHistory);
     selectedTags = new Set(interTags);
     setWeightSlidersFromProfile(avg);
 
-    let data;
-    if (currentMode === "audio") {
-      data = await fetchAudioSimilar(track.spotify_url);
-    } else {
-      data = await fetchLastfmSimilar(track.spotify_url);
+    const request = beginRequest();
+    try {
+      let data;
+      if (currentMode === "audio") {
+        data = await fetchAudioSimilar(track.spotify_url, [], request);
+      } else {
+        data = await fetchLastfmSimilar(track.spotify_url, [], request);
+      }
+      if (!isCurrentRequest(request.requestId)) return;
+      seedTrack = data.seed_track;
+      allTracks = data.similar_tracks;
+      seedTags = data.seed_tags || [];
+      tagCategories = data.tag_categories || {};
+      approximated = data.approximated || false;
+      mappedCount = data.mapped_count || 0;
+      unmappedCount = data.unmapped_count || 0;
+      mappingDegradedReason = data.mapping_degraded_reason || null;
+      addToSeen(allTracks);
+      renderSeed(seedTrack);
+      buildFilters();
+      renderFiltered();
+      updateActionsBar();
+      if (!keepTrace) {
+        traceHistory = traceHistory.slice();
+      }
+      renderDrillPanel();
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        errorEl.textContent = err.message || "Drill search failed.";
+        errorEl.classList.remove("hidden");
+      }
+    } finally {
+      endRequest();
+      updateActionsBar();
     }
-    seedTrack = data.seed_track;
-    allTracks = data.similar_tracks;
-    seedTags = data.seed_tags || [];
-    tagCategories = data.tag_categories || {};
-    approximated = data.approximated || false;
-    addToSeen(allTracks);
-    renderSeed(seedTrack);
-    buildFilters();
-    renderFiltered();
-    updateActionsBar();
-    renderDrillPanel();
   }
 
   function currentRequestLimit(excludeCount = 0) {
-    const base = Math.max(displayLimit, 50);
+    const poolLimit = Math.max(displayLimit * 2, 25);
+    const base = Math.min(poolLimit, 80);
     if (excludeCount > 0) {
-      return Math.min(base + 25, 100);
+      return Math.min(base + 20, 100);
     }
-    return Math.min(base, 60);
+    return base;
   }
 
   async function search(options = {}) {
-    const { preserveTrace = false } = options;
+    const { preserveTrace = false, urlOverride = null } = options;
     const url = urlInput.value.trim();
-    if (!url) return;
+    const effectiveUrl = urlOverride || url;
+    if (!effectiveUrl) return;
     displayLimit = parseInt(document.getElementById("limit").value, 10);
 
+    const request = beginRequest();
     stopAudio();
     seedEl.classList.add("hidden");
     filterPanel.classList.add("hidden");
@@ -381,25 +424,33 @@
     allTracks = [];
     seedTrack = null;
     seedTags = [];
+    mappedCount = 0;
+    unmappedCount = 0;
+    mappingDegradedReason = null;
     selectedTags.clear();
     seenTrackKeys.clear();
     exhausted = false;
     softFiltering = false;
     if (!preserveTrace) traceHistory = [];
+    updateActionsBar();
 
     try {
       let data;
       if (currentMode === "audio") {
-        data = await fetchAudioSimilar(url);
+        data = await fetchAudioSimilar(effectiveUrl, [], request);
       } else {
-        data = await fetchLastfmSimilar(url);
+        data = await fetchLastfmSimilar(effectiveUrl, [], request);
       }
+      if (!isCurrentRequest(request.requestId)) return;
 
       seedTrack = data.seed_track;
       allTracks = data.similar_tracks;
       seedTags = data.seed_tags || [];
       tagCategories = data.tag_categories || {};
       approximated = data.approximated || false;
+      mappedCount = data.mapped_count || 0;
+      unmappedCount = data.unmapped_count || 0;
+      mappingDegradedReason = data.mapping_degraded_reason || null;
       addToSeen(allTracks);
 
       renderSeed(seedTrack);
@@ -408,37 +459,66 @@
       updateActionsBar();
       renderDrillPanel();
     } catch (err) {
-      errorEl.textContent = err.message;
-      errorEl.classList.remove("hidden");
+      if (err.name !== "AbortError") {
+        errorEl.textContent = err.message;
+        errorEl.classList.remove("hidden");
+      }
     } finally {
+      endRequest();
       loadingEl.classList.add("hidden");
       searchBtn.disabled = false;
+      updateActionsBar();
     }
   }
 
-  async function fetchLastfmSimilar(url, exclude = []) {
+  function beginRequest() {
+    if (activeController) activeController.abort();
+    activeRequestId += 1;
+    activeController = new AbortController();
+    isRequestInFlight = true;
+    return { requestId: activeRequestId, signal: activeController.signal };
+  }
+
+  function isCurrentRequest(requestId) {
+    return requestId === activeRequestId;
+  }
+
+  function endRequest() {
+    isRequestInFlight = false;
+  }
+
+  async function parseErrorPayload(resp) {
+    const maybeJson = await resp.json().catch(() => null);
+    if (maybeJson) return maybeJson;
+    const text = await resp.text().catch(() => "");
+    return { detail: text || `Request failed (${resp.status})` };
+  }
+
+  async function fetchLastfmSimilar(url, exclude = [], request = null) {
     const limit = currentRequestLimit(exclude.length);
     const resp = await fetch("/api/similar", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url, limit, exclude }),
+      signal: request?.signal,
     });
     if (!resp.ok) {
-      const data = await resp.json().catch(() => ({}));
+      const data = await parseErrorPayload(resp);
       throw new Error(data.detail || `Request failed (${resp.status})`);
     }
     return resp.json();
   }
 
-  async function fetchAudioSimilar(url, exclude = []) {
+  async function fetchAudioSimilar(url, exclude = [], request = null) {
     const limit = currentRequestLimit(exclude.length);
     const resp = await fetch("/api/similar/audio", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url, limit, weights: getWeights(), exclude }),
+      signal: request?.signal,
     });
     if (!resp.ok) {
-      const data = await resp.json().catch(() => ({}));
+      const data = await parseErrorPayload(resp);
       throw new Error(data.detail || `Request failed (${resp.status})`);
     }
     return resp.json();
@@ -463,11 +543,13 @@
   function buildFilters() {
     const tagCounts = {};
     for (const tag of seedTags) {
-      tagCounts[tag] = (tagCounts[tag] || 0) + 5;
+      const normalized = normalizeTag(tag);
+      tagCounts[normalized] = (tagCounts[normalized] || 0) + 5;
     }
     for (const t of allTracks) {
       for (const tag of t.tags || []) {
-        tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+        const normalized = normalizeTag(tag);
+        tagCounts[normalized] = (tagCounts[normalized] || 0) + 1;
       }
     }
 
@@ -479,13 +561,17 @@
 
     const sortedTags = [...new Set([...top30, ...selectedTags].filter((t) => t in tagCounts))];
 
+    const seedKey = seedTrack ? trackKey(seedTrack) : "";
     if (seedTrack && seedTrack.bpm) {
       bpmFilter.classList.remove("hidden");
-      bpmSlider.value = 100;
+      if (seedKey !== lastSeedKey) {
+        bpmSlider.value = 100;
+      }
       updateBpmLabel();
     } else {
       bpmFilter.classList.add("hidden");
     }
+    lastSeedKey = seedKey;
 
     if (sortedTags.length > 0) {
       tagFilter.classList.remove("hidden");
@@ -720,7 +806,7 @@
         body: JSON.stringify({ track_uris: [uri] }),
       });
       if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}));
+        const data = await parseErrorPayload(resp);
         throw new Error(queueErrorText(data, resp.status));
       }
       const data = await resp.json();
@@ -794,14 +880,14 @@
           : "";
       const queueBtn =
         spotifyConnected && t.spotify_id
-          ? `<button class="queue-btn" data-uri="spotify:track:${t.spotify_id}" title="Add to queue">+Q</button>`
+          ? `<button class="queue-btn" data-uri="spotify:track:${t.spotify_id}" title="Add to queue" aria-label="Add ${esc(t.name)} to queue">+Q</button>`
           : "";
       const mappingNote = !t.spotify_id
         ? `<div class="detail">No Spotify match found for queue/playlist actions yet.</div>`
         : "";
       const drillBtn =
         t.spotify_url
-          ? `<button class="drill-btn" data-drill-idx="${idx}" title="Drill down with this track">Drill</button>`
+          ? `<button class="drill-btn" data-drill-idx="${idx}" title="Drill down with this track" aria-label="Drill down with ${esc(t.name)}">Drill</button>`
           : "";
       html += `
         <div class="track-card">
@@ -861,7 +947,11 @@
     stopAudio();
     currentAudio = new Audio(url);
     currentAudio.volume = 0.5;
-    currentAudio.play();
+    currentAudio.play().catch(() => {
+      btn.innerHTML = "&#9654;";
+      currentAudio = null;
+      actionStatus.textContent = "Preview could not be played in this browser context.";
+    });
     btn.innerHTML = "&#9724;";
     currentAudio.addEventListener("ended", () => {
       btn.innerHTML = "&#9654;";
@@ -908,9 +998,27 @@
   function updateActionsBar() {
     if (allTracks.length > 0 && spotifyConnected) {
       actionsBar.classList.remove("hidden");
+      savePlaylistBtn.disabled = isRequestInFlight;
+      addQueueBtn.disabled = isRequestInFlight;
+      const degradeNote = mappingDegradedReason ? ` (${mappingDegradedReason.replaceAll("_", " ")})` : "";
+      actionStatus.textContent = `${mappedCount}/${mappedCount + unmappedCount} tracks mapped to Spotify${degradeNote}. Queue/playlist use mapped tracks only.`;
     } else {
       actionsBar.classList.add("hidden");
     }
+  }
+
+  function mergeTracksByKey(existingTracks, incomingTracks) {
+    const byKey = new Map();
+    for (const track of existingTracks) byKey.set(trackKey(track), track);
+    for (const track of incomingTracks) byKey.set(trackKey(track), track);
+    return [...byKey.values()];
+  }
+
+  function getActionableTrackUris() {
+    const ranked = rankTracks().slice(0, displayLimit);
+    const mappable = ranked.filter((t) => t.spotify_id);
+    const uris = mappable.map((t) => `spotify:track:${t.spotify_id}`);
+    return { uris, shown: ranked.length, mappable: mappable.length, unmapped: ranked.length - mappable.length };
   }
 
   spotifyLoginBtn.addEventListener("click", () => {
@@ -934,7 +1042,8 @@
   }
 
   savePlaylistBtn.addEventListener("click", async () => {
-    const uris = getFilteredTrackUris();
+    const actionData = getActionableTrackUris();
+    const uris = actionData.uris;
     if (uris.length === 0) {
       actionStatus.textContent = "No Spotify tracks in current results.";
       return;
@@ -942,7 +1051,7 @@
     const name = seedTrack
       ? `Follow Your Cat ID - ${seedTrack.name} - ${seedTrack.artists[0]}`
       : "Follow Your Cat ID";
-    actionStatus.textContent = "Creating playlist...";
+    actionStatus.textContent = `Creating playlist (${actionData.mappable} mappable, ${actionData.unmapped} skipped)...`;
     savePlaylistBtn.disabled = true;
     try {
       const resp = await fetch("/api/spotify/playlist", {
@@ -951,8 +1060,8 @@
         body: JSON.stringify({ name, track_uris: uris }),
       });
       if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}));
-        throw new Error(data.detail || `Failed (${resp.status})`);
+        const data = await parseErrorPayload(resp);
+        throw new Error(queueErrorText(data, resp.status));
       }
       const data = await resp.json();
       actionStatus.innerHTML = `Playlist created! <a href="${data.playlist_url}" target="_blank" rel="noopener">Open in Spotify</a>`;
@@ -964,12 +1073,13 @@
   });
 
   addQueueBtn.addEventListener("click", async () => {
-    const uris = getFilteredTrackUris();
+    const actionData = getActionableTrackUris();
+    const uris = actionData.uris;
     if (uris.length === 0) {
       actionStatus.textContent = "No Spotify tracks in current results.";
       return;
     }
-    actionStatus.textContent = "Adding to queue...";
+    actionStatus.textContent = `Adding to queue (${actionData.mappable} mappable, ${actionData.unmapped} skipped)...`;
     addQueueBtn.disabled = true;
     try {
       const resp = await fetch("/api/spotify/queue", {
@@ -978,7 +1088,7 @@
         body: JSON.stringify({ track_uris: uris }),
       });
       if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}));
+        const data = await parseErrorPayload(resp);
         throw new Error(queueErrorText(data, resp.status));
       }
       const data = await resp.json();

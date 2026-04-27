@@ -1,10 +1,10 @@
 import asyncio
 import logging
-import time
 
 import httpx
 
 from backend.config import LASTFM_API_KEY
+from backend.http_policy import aget_json_with_policy, get_json_with_policy
 
 logger = logging.getLogger(__name__)
 
@@ -24,32 +24,14 @@ def _lastfm_get(params: dict, timeout: int = 15) -> dict:
     params.setdefault("api_key", LASTFM_API_KEY)
     params.setdefault("format", "json")
     params.setdefault("autocorrect", 1)
-    for attempt in range(2):
-        try:
-            resp = httpx.get(LASTFM_BASE, params=params, timeout=timeout)
-            resp.raise_for_status()
-            return resp.json()
-        except httpx.TransportError:
-            if attempt == 0:
-                time.sleep(0.5)
-                continue
-            raise
+    return get_json_with_policy(LASTFM_BASE, params=params, timeout=timeout, attempts=3)
 
 
 async def _lastfm_aget(client: httpx.AsyncClient, params: dict, timeout: int = 10) -> dict:
     params.setdefault("api_key", LASTFM_API_KEY)
     params.setdefault("format", "json")
     params.setdefault("autocorrect", 1)
-    for attempt in range(2):
-        try:
-            resp = await client.get(LASTFM_BASE, params=params, timeout=timeout)
-            resp.raise_for_status()
-            return resp.json()
-        except httpx.TransportError:
-            if attempt == 0:
-                await asyncio.sleep(0.5)
-                continue
-            raise
+    return await aget_json_with_policy(client, LASTFM_BASE, params=params, timeout=timeout, attempts=3)
 
 
 def _parse_tags(data: dict, limit: int = 15) -> list[str]:

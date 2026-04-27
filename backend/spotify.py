@@ -3,6 +3,7 @@ import math
 import re
 import time
 from functools import lru_cache
+from difflib import SequenceMatcher
 
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
@@ -24,17 +25,55 @@ TRACK_URI_PATTERN = re.compile(r"spotify:track:([a-zA-Z0-9]+)")
 
 TARGET_THRESHOLD = 0.3
 SPOTIFY_RATE_LIMIT_COOLDOWN_SECONDS = 180
-_spotify_throttled_until = 0.0
+_spotify_mapping_throttled_until = 0.0
+_spotify_feature_throttled_until = 0.0
+MAPPING_RESULT_LIMIT = 5
+MAPPING_MIN_SCORE = 0.65
 
 
-def _set_spotify_throttled(retry_after_seconds: int | None = None) -> None:
-    global _spotify_throttled_until
+def _set_mapping_throttled(retry_after_seconds: int | None = None) -> None:
+    global _spotify_mapping_throttled_until
     cooldown = retry_after_seconds or SPOTIFY_RATE_LIMIT_COOLDOWN_SECONDS
-    _spotify_throttled_until = max(_spotify_throttled_until, time.monotonic() + max(1, cooldown))
+    _spotify_mapping_throttled_until = max(
+        _spotify_mapping_throttled_until,
+        time.monotonic() + max(1, cooldown),
+    )
 
 
-def spotify_search_allowed() -> bool:
-    return time.monotonic() >= _spotify_throttled_until
+def _set_feature_throttled(retry_after_seconds: int | None = None) -> None:
+    global _spotify_feature_throttled_until
+    cooldown = retry_after_seconds or SPOTIFY_RATE_LIMIT_COOLDOWN_SECONDS
+    _spotify_feature_throttled_until = max(
+        _spotify_feature_throttled_until,
+        time.monotonic() + max(1, cooldown),
+    )
+
+
+def spotify_mapping_allowed() -> bool:
+    return time.monotonic() >= _spotify_mapping_throttled_until
+
+
+def spotify_feature_calls_allowed() -> bool:
+    return time.monotonic() >= _spotify_feature_throttled_until
+
+
+def _handle_spotify_rate_limit(
+    exc: spotipy.SpotifyException,
+    target: str,
+) -> bool:
+    if exc.http_status != 429:
+        return False
+    retry_after = None
+    try:
+        retry_after = int(exc.headers.get("Retry-After", "0")) if exc.headers else None
+    except Exception:
+        retry_after = None
+    if target == "mapping":
+        _set_mapping_throttled(retry_after)
+    else:
+        _set_feature_throttled(retry_after)
+    logger.warning("Spotify API throttled for %s calls; entering cooldown.", target)
+    return True
 
 
 @lru_cache(maxsize=1)
@@ -97,33 +136,94 @@ def get_track_info(url_or_uri: str) -> TrackInfo:
 
 
 def search_track(artist: str, track_name: str) -> TrackInfo | None:
-    """Search Spotify for a track by artist + name. Returns metadata or None."""
+    """Resolve a Spotify track by artist + name via multi-pass matching."""
     return _search_track_cached(artist.strip().lower(), track_name.strip().lower())
 
 
 @lru_cache(maxsize=1024)
 def _search_track_cached(artist: str, track_name: str) -> TrackInfo | None:
-    if not spotify_search_allowed():
+    if not spotify_mapping_allowed():
         return None
+
     sp = get_spotify_client()
-    query = f"artist:{artist} track:{track_name}"
-    try:
-        results = sp.search(q=query, type="track", limit=1)
-    except spotipy.SpotifyException as exc:
-        if exc.http_status == 429:
-            retry_after = None
-            try:
-                retry_after = int(exc.headers.get("Retry-After", "0")) if exc.headers else None
-            except Exception:
-                retry_after = None
-            _set_spotify_throttled(retry_after)
-            logger.warning("Spotify search throttled; entering cooldown.")
-            return None
-        raise
-    items = results.get("tracks", {}).get("items", [])
-    if not items:
-        return None
-    return _track_to_info(items[0])
+    normalized_title = _normalize_track_title(track_name)
+
+    passes: list[tuple[str, int]] = [
+        (f"artist:{artist} track:{track_name}", 1),
+        (f"artist:{artist} track:{normalized_title}", 3),
+        (f"{artist} {normalized_title}", MAPPING_RESULT_LIMIT),
+    ]
+
+    best_track: TrackInfo | None = None
+    best_score = 0.0
+    for query, limit in passes:
+        items = _run_search_with_retry(sp, query=query, limit=limit)
+        if not items:
+            continue
+        candidate, score = _pick_best_mapping_candidate(items, artist, track_name)
+        if candidate and score > best_score:
+            best_track = candidate
+            best_score = score
+        if best_track and best_score >= 0.9:
+            break
+
+    if best_track and best_score >= MAPPING_MIN_SCORE:
+        return best_track
+    return None
+
+
+def _run_search_with_retry(sp: spotipy.Spotify, query: str, limit: int) -> list[dict]:
+    if not spotify_mapping_allowed():
+        return []
+
+    attempts = 2
+    for attempt in range(attempts):
+        try:
+            results = sp.search(q=query, type="track", limit=limit)
+            return results.get("tracks", {}).get("items", [])
+        except spotipy.SpotifyException as exc:
+            if _handle_spotify_rate_limit(exc, target="mapping"):
+                if attempt == attempts - 1:
+                    return []
+                time.sleep(0.25 * (attempt + 1))
+                continue
+            raise
+    return []
+
+
+def _normalize_track_title(value: str) -> str:
+    normalized = value.lower()
+    normalized = re.sub(r"\([^)]*\)", " ", normalized)
+    normalized = re.sub(r"\[[^\]]*\]", " ", normalized)
+    normalized = re.sub(r"\b(feat|ft|remix|edit|version)\b.*$", " ", normalized)
+    normalized = re.sub(r"[^a-z0-9\s]", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized or value.lower().strip()
+
+
+def _text_similarity(a: str, b: str) -> float:
+    return SequenceMatcher(None, _normalize_track_title(a), _normalize_track_title(b)).ratio()
+
+
+def _pick_best_mapping_candidate(
+    items: list[dict],
+    artist: str,
+    track_name: str,
+) -> tuple[TrackInfo | None, float]:
+    best_item: dict | None = None
+    best_score = 0.0
+    for item in items:
+        item_artist_names = [a.get("name", "").lower() for a in item.get("artists", [])]
+        artist_match = max((_text_similarity(artist, n) for n in item_artist_names), default=0.0)
+        title_match = _text_similarity(track_name, item.get("name", ""))
+        score = (artist_match * 0.55) + (title_match * 0.45)
+        if score > best_score:
+            best_score = score
+            best_item = item
+
+    if best_item is None:
+        return None, 0.0
+    return _track_to_info(best_item), best_score
 
 
 # ---------------------------------------------------------------------------
@@ -150,12 +250,18 @@ def get_audio_features(track_ids: list[str]) -> dict[str, AudioFeatures | None]:
     which typically means the Spotify app lacks extended quota access.
     """
     sp = get_spotify_client()
+    if not spotify_feature_calls_allowed():
+        return {track_id: None for track_id in track_ids}
     result: dict[str, AudioFeatures | None] = {}
     for i in range(0, len(track_ids), 100):
         batch = track_ids[i : i + 100]
         try:
             features_list = sp.audio_features(batch)
         except spotipy.SpotifyException as exc:
+            if _handle_spotify_rate_limit(exc, target="feature"):
+                for tid in batch:
+                    result[tid] = None
+                continue
             if exc.http_status == 403:
                 raise ValueError(
                     "Your Spotify app does not have access to the audio-features endpoint. "
@@ -209,6 +315,8 @@ def get_recommendations(
 ) -> list[TrackInfo]:
     """Fetch Spotify recommendations seeded by a track with audio feature targets."""
     sp = get_spotify_client()
+    if not spotify_feature_calls_allowed():
+        return []
     try:
         resp = sp.recommendations(
             seed_tracks=[seed_track_id],
@@ -216,6 +324,8 @@ def get_recommendations(
             **targets,
         )
     except spotipy.SpotifyException as exc:
+        if _handle_spotify_rate_limit(exc, target="feature"):
+            return []
         if exc.http_status == 403:
             raise ValueError(
                 "Your Spotify app does not have access to the recommendations endpoint. "

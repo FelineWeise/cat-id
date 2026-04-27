@@ -4,6 +4,7 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-https://app.cat-id.eu}"
 SEED_TRACK_URL="${SEED_TRACK_URL:-https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT}"
 CHECK_AUDIO="${CHECK_AUDIO:-1}"
+MAX_REQUEST_SECONDS="${MAX_REQUEST_SECONDS:-20}"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -15,12 +16,13 @@ require_command() {
 post_json() {
   local url="$1"
   local payload="$2"
-  curl -fsS -X POST "${url}" \
+  curl -fsS --retry 2 --retry-delay 1 --max-time "${MAX_REQUEST_SECONDS}" -X POST "${url}" \
     -H "Content-Type: application/json" \
     -d "${payload}"
 }
 
 require_command curl
+require_command python3
 
 echo "Smoke test target: ${BASE_URL}"
 echo "Checking health endpoint..."
@@ -28,12 +30,28 @@ curl -fsS "${BASE_URL%/}/api/health" >/dev/null
 echo "Health endpoint OK"
 
 echo "Checking /api/similar..."
-post_json "${BASE_URL%/}/api/similar" "{\"url\":\"${SEED_TRACK_URL}\",\"limit\":5}" >/dev/null
+post_json "${BASE_URL%/}/api/similar" "{\"url\":\"${SEED_TRACK_URL}\",\"limit\":5}" >/tmp/cat_id_similar.json
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+payload = json.loads(Path("/tmp/cat_id_similar.json").read_text())
+if "seed_track" not in payload or "similar_tracks" not in payload:
+    raise SystemExit("/api/similar payload missing required keys")
+PY
 echo "/api/similar OK"
 
 if [[ "${CHECK_AUDIO}" == "1" ]]; then
   echo "Checking /api/similar/audio..."
-  post_json "${BASE_URL%/}/api/similar/audio" "{\"url\":\"${SEED_TRACK_URL}\",\"limit\":5,\"weights\":{\"tempo\":0.8,\"energy\":0.5,\"valence\":0.5,\"danceability\":0.4,\"acousticness\":0.3,\"instrumentalness\":0.2}}" >/dev/null
+  post_json "${BASE_URL%/}/api/similar/audio" "{\"url\":\"${SEED_TRACK_URL}\",\"limit\":5,\"weights\":{\"tempo\":0.8,\"energy\":0.5,\"valence\":0.5,\"danceability\":0.4,\"acousticness\":0.3,\"instrumentalness\":0.2}}" >/tmp/cat_id_audio.json
+  python3 - <<'PY'
+import json
+from pathlib import Path
+
+payload = json.loads(Path("/tmp/cat_id_audio.json").read_text())
+if "seed_track" not in payload or "similar_tracks" not in payload:
+    raise SystemExit("/api/similar/audio payload missing required keys")
+PY
   echo "/api/similar/audio OK"
 fi
 

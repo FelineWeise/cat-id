@@ -22,7 +22,7 @@ This folder is the **runtime contract** for cat-id on the **LAED base VM**: Comp
 
 2. Copy **`docker-compose.yml`**, **`Caddyfile`**, and create **`production.env`** from **`production.env.example`**.
 
-3. Set **`CAT_ID_IMAGE`** to your pushed image, e.g. `rg.fr-par.scw.cloud/cat-id/app:v1.0.0` (namespace `cat-id`, repository `app`; pin tags or digests in production).
+3. Set **`CAT_ID_IMAGE`** to your pushed image, e.g. `rg.fr-par.scw.cloud/cat-id/app:v1.0.0` (namespace `cat-id`, repository `app`; pin immutable tags or digests in production, do not rely on `:latest`).
 
 4. From that directory:
 

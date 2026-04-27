@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -50,17 +52,27 @@ class TrackInfo(BaseModel):
     preview_url: str | None = None
     spotify_url: str | None = None
     spotify_id: str | None = None
-    spotify_mapping_status: str = "mapped"
+    spotify_mapping_status: Literal["mapped", "unmapped"] = "mapped"
     match_score: float | None = None
     bpm: float | None = None
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     audio_features: AudioFeatures | None = None
 
 
 class SimilarTracksResponse(BaseModel):
     seed_track: TrackInfo
     similar_tracks: list[TrackInfo]
-    seed_tags: list[str] = []
+    seed_tags: list[str] = Field(default_factory=list)
+    total_candidates: int = Field(
+        default=0,
+        description="Total ranked candidate count before final limit slicing.",
+    )
+    mapped_count: int = Field(default=0, description="Number of tracks mapped to Spotify IDs.")
+    unmapped_count: int = Field(default=0, description="Number of tracks without Spotify mapping.")
+    mapping_degraded_reason: str | None = Field(
+        default=None,
+        description="Reason mapping quality was reduced (for example rate limits or time budget).",
+    )
     tag_categories: dict[str, str] = Field(
         default_factory=dict,
         description="Map tag name -> category (mood, genre, vocals_instrumentals) for filter sections",

@@ -83,7 +83,7 @@ chmod +x scripts/push_to_scaleway_registry.sh
 
 **Option B — reuse LAED’s namespace:** push as `rg.<region>.scw.cloud/<laed-namespace>/cat-id:<tag>` and set `CAT_ID_IMAGE` accordingly—**no** `infrastructure/registry/` apply.
 
-Pin **tags or digests** for production; avoid relying only on `:latest`.
+Pin immutable **tags or digests** for production; avoid relying on `:latest`.
 
 ## 4) Runtime on the LAED host
 

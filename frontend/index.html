@@ -121,7 +121,7 @@
     <div id="actions-bar" class="actions-bar hidden">
       <button id="save-playlist-btn" class="action-btn" title="Save filtered results as a Spotify playlist">Save as Playlist</button>
       <button id="add-queue-btn" class="action-btn" title="Add filtered results to your Spotify queue">Add to Queue</button>
-      <span id="action-status" class="action-status"></span>
+      <span id="action-status" class="action-status" aria-live="polite"></span>
     </div>
 
     <div class="results-layout">
@@ -131,8 +131,8 @@
       </aside>
     </div>
     <button id="discover-more-btn" class="discover-more-btn hidden">Discover More</button>
-    <div id="error" class="error hidden"></div>
-    <div id="loading" class="loading hidden">
+    <div id="error" class="error hidden" role="alert"></div>
+    <div id="loading" class="loading hidden" aria-live="polite">
       <div class="spinner"></div>
       <span>Searching for similar tracks&hellip;</span>
     </div>

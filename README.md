@@ -18,6 +18,7 @@ A web app that finds songs similar to a given Spotify track using two discovery 
 - **Listener Similarity:** finds tracks that people who listen to the seed track also tend to play; this is crowd/listening-pattern based.
 - **Audio Similarity:** finds tracks that sound close to the seed by comparing sonic features (tempo, energy, valence, danceability, acousticness, instrumentalness).
 - If Spotify audio-features access is unavailable, audio mode uses tag-based approximation and marks responses as approximated.
+- In approximated mode, results are still mapped back to Spotify tracks where possible; queue/playlist actions include mapped tracks and skip unmapped ones.
 
 ## Prerequisites
 
@@ -55,6 +56,9 @@ cp .env.example .env
 | `APP_ENV` | Optional | `development` (local SSL/reload) or `production` |
 | `ALLOWED_ORIGINS` | Recommended | Comma-separated CORS allowlist |
 | `ENABLE_DEBUG_ENDPOINT` | Optional | Set `false` for public deployments |
+| `SESSION_STORE_BACKEND` | Optional | `memory` (default) or `redis` for shared OAuth sessions |
+| `SESSION_TTL_SECONDS` | Optional | Session TTL in seconds (default `3600`) |
+| `REDIS_URL` | Required for redis backend | Redis URL for shared OAuth session storage |
 
 ## Running
 
@@ -265,7 +269,8 @@ Details: [infrastructure/deploy/README.md](infrastructure/deploy/README.md), [in
 }
 ```
 
-**Response:** JSON with `seed_track` and `similar_tracks`, each containing name, artists, album, album art, Spotify URL, match score, BPM, and tags.
+**Response:** JSON with `seed_track` and `similar_tracks`, each containing name, artists, album, album art, Spotify URL, match score, BPM, and tags. It also includes `mapped_count`, `unmapped_count`, and optional `mapping_degraded_reason` for Spotify action readiness.
+`limit` controls returned results; backend may overfetch internally for ranking quality. Response includes `total_candidates` before final slicing.
 
 ### `POST /api/similar/audio` — Audio Similarity (Spotify)
 

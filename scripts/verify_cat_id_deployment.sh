@@ -8,6 +8,7 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-https://app.cat-id.eu}"
 EXPECTED_IPV4="${EXPECTED_IPV4:-}"
 APP_HOST="${APP_HOST:-app.cat-id.eu}"
+MAX_HEALTH_SECONDS="${MAX_HEALTH_SECONDS:-8}"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -18,6 +19,7 @@ require_command() {
 
 require_command dig
 require_command curl
+require_command python3
 
 echo "Checking A record for ${APP_HOST} ..."
 ipv4="$(dig +short A "${APP_HOST}" | head -1 || true)"
@@ -34,7 +36,19 @@ fi
 
 health_url="${BASE_URL%/}/api/health"
 echo "Checking ${health_url} ..."
-curl -fsS "${health_url}" >/dev/null
+http_code="$(curl -sS -o /tmp/cat_id_health.json -w "%{http_code}" --retry 3 --retry-delay 1 --max-time "${MAX_HEALTH_SECONDS}" "${health_url}")"
+if [[ "${http_code}" != "200" ]]; then
+  echo "Health endpoint returned HTTP ${http_code}."
+  exit 1
+fi
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+payload = json.loads(Path("/tmp/cat_id_health.json").read_text())
+if payload.get("status") != "ok":
+    raise SystemExit("Health payload is missing status=ok")
+PY
 echo "Health OK."
 
 echo "Verify Spotify Developer Dashboard redirect URI matches:"

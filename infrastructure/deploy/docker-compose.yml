@@ -20,6 +20,12 @@ services:
       - "18008:8000"
     expose:
       - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - cat-id-net
 
@@ -38,7 +44,8 @@ services:
     networks:
       - cat-id-net
     depends_on:
-      - cat-id
+      cat-id:
+        condition: service_healthy
 
 networks:
   cat-id-net:

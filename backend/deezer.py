@@ -1,11 +1,14 @@
 import asyncio
+import logging
 
 import httpx
+from backend.http_policy import aget_json_with_policy
 
 DEEZER_SEARCH = "https://api.deezer.com/search"
 DEEZER_TRACK = "https://api.deezer.com/track"
 _sem = asyncio.Semaphore(8)
 _EMPTY = {"preview": None, "bpm": None}
+logger = logging.getLogger(__name__)
 
 
 async def fetch_track_info(client: httpx.AsyncClient, artist: str, track_name: str) -> dict:
@@ -14,33 +17,37 @@ async def fetch_track_info(client: httpx.AsyncClient, artist: str, track_name: s
     Returns dict with keys: preview (str|None), bpm (float|None).
     """
     async with _sem:
-        for attempt in range(2):
-            try:
-                query = f'artist:"{artist}" track:"{track_name}"'
-                resp = await client.get(DEEZER_SEARCH, params={"q": query}, timeout=5)
-                resp.raise_for_status()
-                items = resp.json().get("data", [])
-                if not items:
-                    return _EMPTY
-
-                preview = items[0].get("preview") or None
-                track_id = items[0].get("id")
-                bpm = None
-
-                if track_id:
-                    detail = await client.get(f"{DEEZER_TRACK}/{track_id}", timeout=5)
-                    detail.raise_for_status()
-                    bpm = detail.json().get("bpm") or None
-                    if bpm is not None and bpm > 0:
-                        bpm = float(bpm)
-                    else:
-                        bpm = None
-
-                return {"preview": preview, "bpm": bpm}
-            except httpx.TransportError:
-                if attempt == 0:
-                    await asyncio.sleep(0.5)
-                    continue
+        try:
+            query = f'artist:"{artist}" track:"{track_name}"'
+            search_payload = await aget_json_with_policy(
+                client,
+                DEEZER_SEARCH,
+                params={"q": query},
+                timeout=5,
+                attempts=3,
+            )
+            items = search_payload.get("data", [])
+            if not items:
                 return _EMPTY
-            except Exception:
-                return _EMPTY
+
+            preview = items[0].get("preview") or None
+            track_id = items[0].get("id")
+            bpm = None
+            if track_id:
+                detail = await aget_json_with_policy(
+                    client,
+                    f"{DEEZER_TRACK}/{track_id}",
+                    params={},
+                    timeout=5,
+                    attempts=3,
+                )
+                bpm = detail.get("bpm") or None
+                if bpm is not None and bpm > 0:
+                    bpm = float(bpm)
+                else:
+                    bpm = None
+
+            return {"preview": preview, "bpm": bpm}
+        except Exception:
+            logger.warning("Deezer lookup failed for '%s - %s'", artist, track_name, exc_info=True)
+            return _EMPTY

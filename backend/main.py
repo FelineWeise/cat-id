@@ -19,6 +19,9 @@ from backend.config import (
     APP_BASE_URL,
     APP_ENV,
     ENABLE_DEBUG_ENDPOINT,
+    REDIS_URL,
+    SESSION_STORE_BACKEND,
+    SESSION_TTL_SECONDS,
     SPOTIFY_CLIENT_ID,
     SPOTIFY_REDIRECT_DERIVED_FROM_APP_BASE,
     SPOTIFY_REDIRECT_URI,
@@ -32,7 +35,7 @@ from backend.spotify import (
     get_recommendations,
     get_track_info,
     search_track,
-    spotify_search_allowed,
+    spotify_mapping_allowed,
 )
 from backend.spotify_auth import (
     exchange_code,
@@ -40,6 +43,7 @@ from backend.spotify_auth import (
     get_user_client,
     refresh_if_needed,
 )
+from backend.session_store import build_session_store
 from backend.tag_categories import (
     INSTRUMENTAL_TAGS,
     VOCAL_TAGS,
@@ -63,19 +67,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Always over-fetch from Last.fm so the client has a large pool to filter.
-OVERFETCH_LIMIT = 50
+BASE_OVERFETCH_FACTOR = 2
+MAX_OVERFETCH_LIMIT = 120
 MAX_ENRICH_CONCURRENCY = 10
 MIN_FETCH_MULTIPLIER = 2
 MAX_FETCH_MULTIPLIER = 3
 FULL_TAG_ENRICH_LIMIT = 25
 ENRICH_TIME_BUDGET_SECONDS = 12.0
+MAPPING_ENRICH_LIMIT = 40
 SPOTIFY_ENRICH_SEED_WEIGHT = 0.7
 TAG_ALIGNMENT_WEIGHT = 0.25
 DEEZER_SIGNAL_WEIGHT = 0.05
 
 logger = logging.getLogger(__name__)
 _shared_http_client: httpx.AsyncClient | None = None
+session_store = build_session_store(SESSION_STORE_BACKEND, REDIS_URL)
 
 
 def _get_http_client() -> httpx.AsyncClient:
@@ -115,7 +121,7 @@ async def shutdown_clients() -> None:
 
 async def _enrich_lastfm(
     seed: TrackInfo, limit: int, exclude: set[str] | None = None,
-) -> tuple[list[TrackInfo], list[str]]:
+) -> tuple[list[TrackInfo], list[str], str | None]:
     """Shared Last.fm pipeline: fetch similar tracks, enrich with Spotify/Deezer/tags.
 
     Mutates *seed* in-place (adds bpm, tags, preview_url).
@@ -168,18 +174,34 @@ async def _enrich_lastfm(
 
     semaphore = asyncio.Semaphore(MAX_ENRICH_CONCURRENCY)
     enrich_deadline = time.monotonic() + ENRICH_TIME_BUDGET_SECONDS
+    mapping_degraded_reason: str | None = None
+    mapping_attempted = 0
 
     async def enrich(item: dict, include_tags: bool) -> TrackInfo | None:
+        nonlocal mapping_degraded_reason
+        nonlocal mapping_attempted
         artist_name = item["artist"]
         track_name = item["name"]
         match_score = item["match"]
 
         async with semaphore:
             try:
-                if not spotify_search_allowed() or time.monotonic() >= enrich_deadline:
-                    sp_track_task = asyncio.sleep(0, result=None)
-                else:
+                mapping_allowed = (
+                    mapping_attempted < MAPPING_ENRICH_LIMIT
+                    and spotify_mapping_allowed()
+                    and time.monotonic() < enrich_deadline
+                )
+                if mapping_allowed:
+                    mapping_attempted += 1
                     sp_track_task = asyncio.to_thread(search_track, artist_name, track_name)
+                else:
+                    if mapping_attempted >= MAPPING_ENRICH_LIMIT:
+                        mapping_degraded_reason = "mapping_limit_reached"
+                    elif not spotify_mapping_allowed():
+                        mapping_degraded_reason = "spotify_mapping_rate_limited"
+                    elif time.monotonic() >= enrich_deadline:
+                        mapping_degraded_reason = "enrich_time_budget_exceeded"
+                    sp_track_task = asyncio.sleep(0, result=None)
                 sp_track, dz_info = await asyncio.gather(
                     sp_track_task,
                     deezer_fetch(client, artist_name, track_name),
@@ -221,7 +243,11 @@ async def _enrich_lastfm(
     tail_results = await asyncio.gather(*(enrich(item, include_tags=False) for item in tail_batch))
     results = [*top_results, *tail_results]
 
-    return [r for r in results if r is not None], [normalize_tag(tag) for tag in seed_tags]
+    return (
+        [r for r in results if r is not None],
+        [normalize_tag(tag) for tag in seed_tags],
+        mapping_degraded_reason,
+    )
 
 
 def _track_tag_set(track: TrackInfo) -> set[str]:
@@ -252,6 +278,11 @@ def _fused_rank_value(track: TrackInfo) -> tuple[float, float, float]:
     )
 
 
+def _mapping_summary(tracks: Sequence[TrackInfo]) -> tuple[int, int]:
+    mapped = sum(1 for track in tracks if track.spotify_id)
+    return mapped, max(0, len(tracks) - mapped)
+
+
 @app.post("/api/similar", response_model=SimilarTracksResponse)
 async def api_similar(req: TrackRequest):
     try:
@@ -262,8 +293,9 @@ async def api_similar(req: TrackRequest):
         raise HTTPException(status_code=502, detail=f"Spotify API error: {exc}")
 
     exclude = set(req.exclude) if req.exclude else None
+    fetch_limit = min(MAX_OVERFETCH_LIMIT, max(req.limit, req.limit * BASE_OVERFETCH_FACTOR))
     try:
-        similar, seed_tags = await _enrich_lastfm(seed, OVERFETCH_LIMIT, exclude)
+        similar, seed_tags, mapping_degraded_reason = await _enrich_lastfm(seed, fetch_limit, exclude)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -275,9 +307,15 @@ async def api_similar(req: TrackRequest):
     tag_categories = build_tag_categories(list(all_tags))
 
     similar.sort(key=_fused_rank_value, reverse=True)
+    limited = similar[: req.limit]
+    mapped_count, unmapped_count = _mapping_summary(limited)
     return SimilarTracksResponse(
         seed_track=seed,
-        similar_tracks=similar,
+        similar_tracks=limited,
+        total_candidates=len(similar),
+        mapped_count=mapped_count,
+        unmapped_count=unmapped_count,
+        mapping_degraded_reason=mapping_degraded_reason,
         seed_tags=seed_tags,
         tag_categories=tag_categories,
     )
@@ -339,7 +377,7 @@ async def _audio_spotify_path(
         raise HTTPException(status_code=502, detail=f"Recommendations error: {exc}")
 
     if not candidates:
-        return SimilarTracksResponse(seed_track=seed, similar_tracks=[])
+        return SimilarTracksResponse(seed_track=seed, similar_tracks=[], mapped_count=0, unmapped_count=0)
 
     candidate_ids = [t.spotify_id for t in candidates if t.spotify_id]
     try:
@@ -357,8 +395,14 @@ async def _audio_spotify_path(
             track.match_score = 0.0
 
     candidates.sort(key=lambda t: t.match_score or 0, reverse=True)
+    limited = candidates[: req.limit]
+    mapped_count, unmapped_count = _mapping_summary(limited)
     return SimilarTracksResponse(
-        seed_track=seed, similar_tracks=candidates[: req.limit],
+        seed_track=seed,
+        similar_tracks=limited,
+        total_candidates=len(candidates),
+        mapped_count=mapped_count,
+        unmapped_count=unmapped_count,
     )
 
 
@@ -367,8 +411,9 @@ async def _audio_fallback_path(
 ) -> SimilarTracksResponse:
     """Fallback: Last.fm candidates + tag-estimated features + weighted scoring."""
     exclude = set(req.exclude) if req.exclude else None
+    fetch_limit = min(MAX_OVERFETCH_LIMIT, max(req.limit, req.limit * BASE_OVERFETCH_FACTOR))
     try:
-        similar, seed_tags = await _enrich_lastfm(seed, OVERFETCH_LIMIT, exclude)
+        similar, seed_tags, mapping_degraded_reason = await _enrich_lastfm(seed, fetch_limit, exclude)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -388,9 +433,15 @@ async def _audio_fallback_path(
     for t in similar:
         all_tags.update(t.tags or [])
 
+    limited = similar[: req.limit]
+    mapped_count, unmapped_count = _mapping_summary(limited)
     return SimilarTracksResponse(
         seed_track=seed,
-        similar_tracks=similar[: req.limit],
+        similar_tracks=limited,
+        total_candidates=len(similar),
+        mapped_count=mapped_count,
+        unmapped_count=unmapped_count,
+        mapping_degraded_reason=mapping_degraded_reason,
         seed_tags=seed_tags,
         tag_categories=build_tag_categories(list(all_tags)),
         approximated=True,
@@ -426,11 +477,6 @@ if ENABLE_DEBUG_ENDPOINT:
 # ---------------------------------------------------------------------------
 # Spotify OAuth + user-scoped actions (playlist, queue)
 # ---------------------------------------------------------------------------
-
-# In-memory token store keyed by a simple session id (cookie).
-# For production, use a proper session backend.
-_token_store: dict[str, dict] = {}
-
 
 @app.get("/api/spotify/oauth-config")
 def spotify_oauth_config():
@@ -468,7 +514,7 @@ def spotify_callback(request: Request, code: str = "", error: str = "", state: s
         return RedirectResponse(url="/?spotify_error=token_exchange_failed")
 
     session_id = secrets.token_urlsafe(32)
-    _token_store[session_id] = token_info
+    session_store.set(session_id, token_info, SESSION_TTL_SECONDS)
 
     resp = RedirectResponse(url="/?spotify_connected=1")
     resp.set_cookie("sp_session", session_id, httponly=True, secure=True, samesite="lax", max_age=3600)
@@ -480,12 +526,12 @@ def spotify_callback(request: Request, code: str = "", error: str = "", state: s
 def spotify_status(request: Request):
     """Check whether the user has a valid Spotify session."""
     session_id = request.cookies.get("sp_session", "")
-    token_info = _token_store.get(session_id)
+    token_info = session_store.get(session_id)
     if not token_info:
         return {"connected": False}
     try:
         token_info = refresh_if_needed(token_info)
-        _token_store[session_id] = token_info
+        session_store.set(session_id, token_info, SESSION_TTL_SECONDS)
         sp = get_user_client(token_info["access_token"])
         user = sp.current_user()
         return {"connected": True, "user": user.get("display_name") or user.get("id")}
@@ -496,7 +542,7 @@ def spotify_status(request: Request):
 @app.post("/api/spotify/logout")
 def spotify_logout(request: Request):
     session_id = request.cookies.get("sp_session", "")
-    _token_store.pop(session_id, None)
+    session_store.delete(session_id)
     resp = JSONResponse(content={"ok": True})
     resp.delete_cookie("sp_session")
     return resp
@@ -504,11 +550,11 @@ def spotify_logout(request: Request):
 
 def _get_user_sp(request: Request) -> "spotipy.Spotify":
     session_id = request.cookies.get("sp_session", "")
-    token_info = _token_store.get(session_id)
+    token_info = session_store.get(session_id)
     if not token_info:
         raise HTTPException(status_code=401, detail="Not connected to Spotify. Please log in.")
     token_info = refresh_if_needed(token_info)
-    _token_store[session_id] = token_info
+    session_store.set(session_id, token_info, SESSION_TTL_SECONDS)
     return get_user_client(token_info["access_token"])
 
 
@@ -521,15 +567,29 @@ class PlaylistRequest(BaseModel):
 @app.post("/api/spotify/playlist")
 def create_playlist(req: PlaylistRequest, request: Request):
     """Create a Spotify playlist and add the given tracks."""
-    sp = _get_user_sp(request)
-    user_id = sp.current_user()["id"]
-    playlist = sp.user_playlist_create(user_id, req.name, public=req.public)
-    for i in range(0, len(req.track_uris), 100):
-        sp.playlist_add_items(playlist["id"], req.track_uris[i : i + 100])
-    return {
-        "playlist_id": playlist["id"],
-        "playlist_url": playlist["external_urls"]["spotify"],
-    }
+    try:
+        sp = _get_user_sp(request)
+        user_id = sp.current_user()["id"]
+        playlist = sp.user_playlist_create(user_id, req.name, public=req.public)
+        for i in range(0, len(req.track_uris), 100):
+            sp.playlist_add_items(playlist["id"], req.track_uris[i : i + 100])
+        return {
+            "playlist_id": playlist["id"],
+            "playlist_url": playlist["external_urls"]["spotify"],
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        detail = _classify_queue_error(exc)
+        raise HTTPException(
+            status_code=409 if detail["retryable"] else 502,
+            detail={
+                "code": "PLAYLIST_CREATE_FAILED",
+                "message": detail["message"],
+                "retryable": detail["retryable"],
+                "errors": [{"message": detail["message"], "code": detail["code"]}],
+            },
+        )
 
 
 class QueueRequest(BaseModel):
