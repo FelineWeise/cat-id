@@ -7,13 +7,13 @@
 }
 
 :root {
-  --bg: #121212;
-  --surface: #1e1e1e;
-  --surface2: #282828;
-  --accent: #1db954;
-  --accent-hover: #1ed760;
-  --text: #ffffff;
-  --text-secondary: #b3b3b3;
+  --bg: #f4efe7;
+  --surface: #fbf7f2;
+  --surface2: #e9ded1;
+  --accent: #5b3f2f;
+  --accent-hover: #6a4a38;
+  --text: #2f241b;
+  --text-secondary: #6f6156;
   --radius: 10px;
 }
 
@@ -46,6 +46,12 @@ header h1 {
   margin-top: 0.4rem;
 }
 
+.mode-help {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  margin: -0.5rem 0 1rem;
+}
+
 /* ---- Spotify Auth ---- */
 .spotify-auth {
   display: flex;
@@ -60,7 +66,7 @@ header h1 {
   border: none;
   border-radius: 20px;
   background: var(--accent);
-  color: #000;
+  color: #f9f5ef;
   font-weight: 600;
   font-size: 0.82rem;
   cursor: pointer;
@@ -121,7 +127,7 @@ header h1 {
 
 .mode-btn.active {
   background: var(--accent);
-  color: #000;
+  color: #f9f5ef;
 }
 
 .view-toggle {
@@ -237,6 +243,34 @@ header h1 {
   padding: 0.8rem 1rem;
 }
 
+.drill-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.6rem;
+}
+
+.drill-panel-header h3 {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.drill-close-btn {
+  border: 1px solid var(--surface2);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+}
+
+.drill-close-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .drill-breadcrumbs {
   display: flex;
   flex-wrap: wrap;
@@ -268,6 +302,7 @@ header h1 {
 .input-row {
   display: flex;
   gap: 0.5rem;
+  align-items: stretch;
 }
 
 #track-url {
@@ -291,7 +326,7 @@ header h1 {
   border: none;
   border-radius: var(--radius);
   background: var(--accent);
-  color: #000;
+  color: #f9f5ef;
   font-weight: 700;
   font-size: 1rem;
   cursor: pointer;
@@ -304,6 +339,29 @@ header h1 {
 }
 
 #search-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#reload-btn {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--surface2);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-weight: 700;
+  font-size: 0.92rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+#reload-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#reload-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -527,7 +585,7 @@ header h1 {
 
 .tag-chip.active {
   background: var(--accent);
-  color: #000;
+  color: #f9f5ef;
   font-weight: 600;
   border-color: var(--accent);
 }
@@ -537,7 +595,7 @@ header h1 {
   font-size: 0.8rem;
   color: var(--text-secondary);
   background: var(--surface);
-  border-left: 3px solid #f0ad4e;
+  border-left: 3px solid #b07a3a;
   padding: 0.5rem 0.75rem;
   border-radius: 4px;
   margin-bottom: 0.5rem;
@@ -549,6 +607,22 @@ header h1 {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+}
+
+.results-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 1rem;
+  align-items: start;
+}
+
+.drill-side-panel {
+  margin-top: 1.5rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  position: sticky;
+  top: 1rem;
 }
 
 .results h3 {
@@ -695,7 +769,7 @@ header h1 {
 
 .queue-btn:hover {
   background: var(--accent);
-  color: #000;
+  color: #f9f5ef;
 }
 
 .queue-btn:disabled {
@@ -758,7 +832,7 @@ header h1 {
 
 .action-btn:hover {
   background: var(--accent);
-  color: #000;
+  color: #f9f5ef;
 }
 
 .action-btn:disabled {
@@ -797,7 +871,7 @@ header h1 {
 
 .discover-more-btn:hover {
   background: var(--accent);
-  color: #000;
+  color: #f9f5ef;
 }
 
 /* ---- States ---- */
@@ -832,12 +906,26 @@ header h1 {
 
 .error {
   margin-top: 1.5rem;
-  background: #3b1219;
-  border: 1px solid #f44;
-  color: #f88;
+  background: #f8e9e6;
+  border: 1px solid #b46c5f;
+  color: #6d2f23;
   border-radius: var(--radius);
   padding: 0.85rem 1rem;
   font-size: 0.9rem;
+}
+
+.mode-btn,
+.view-btn,
+.quick-filter-btn,
+.tag-chip,
+.tag-section-label,
+.action-btn,
+.discover-more-btn,
+.filter-panel summary,
+.limit-row label,
+.limit-row select {
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 /* ---- Responsive ---- */
@@ -848,6 +936,15 @@ header h1 {
 
   .input-row {
     flex-direction: column;
+  }
+
+  .results-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .drill-side-panel {
+    position: static;
+    margin-top: 0.75rem;
   }
 
   .tag-chips {

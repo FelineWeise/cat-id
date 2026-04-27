@@ -20,29 +20,31 @@
   const spotifyLoginBtn = document.getElementById("spotify-login-btn");
   const spotifyUserEl = document.getElementById("spotify-user");
   const spotifyLogoutBtn = document.getElementById("spotify-logout-btn");
+  const reloadBtn = document.getElementById("reload-btn");
   const audioWeightsPanel = document.getElementById("audio-weights");
   const weightRows = audioWeightsPanel.querySelectorAll(".weight-row");
   const modeBtns = document.querySelectorAll(".mode-btn");
-  const viewBtns = document.querySelectorAll(".view-btn");
   const drillPanel = document.getElementById("drill-panel");
   const drillBreadcrumbs = document.getElementById("drill-breadcrumbs");
   const drillProfile = document.getElementById("drill-profile");
+  const drillCloseBtn = document.getElementById("drill-close-btn");
+  const drillSidePanel = document.getElementById("drill-side-panel");
+  const drillSideContent = document.getElementById("drill-side-content");
 
   let currentAudio = null;
   let spotifyConnected = false;
-  let currentMode = "lastfm";
+  let currentMode = "audio";
 
   let allTracks = [];
   let seedTrack = null;
   let seedTags = [];
   let tagCategories = {};
   let selectedTags = new Set();
-  let displayLimit = 10;
+  let displayLimit = 50;
   let approximated = false;
   let seenTrackKeys = new Set();
   let exhausted = false;
   let softFiltering = false;
-  let activeView = "search";
   let traceHistory = [];
   let visibleTracks = [];
 
@@ -59,6 +61,13 @@
     { label: "More instrumental", tags: ["instrumental", "no vocal", "no vocals"] },
     { label: "More vocal", tags: ["female vocal", "male vocal", "vocals", "vocal", "female vocals", "male vocals"] },
   ];
+  const TAG_ALIASES = {
+    "female vocals": "female vocal",
+    "male vocals": "male vocal",
+    "no vocals": "no vocal",
+  };
+  const INSTRUMENTAL_TAGS = new Set(["instrumental", "no vocal"]);
+  const VOCAL_TAGS = new Set(["vocal", "vocals", "female vocal", "male vocal"]);
 
   const AUDIO_DIMENSION_LABELS = {
     tempo: "BPM",
@@ -69,6 +78,33 @@
     instrumentalness: "Instrumental",
   };
 
+  function normalizeTag(tag) {
+    const normalized = String(tag || "").trim().toLowerCase().replace(/\s+/g, " ");
+    return TAG_ALIASES[normalized] || normalized;
+  }
+
+  function normalizedTagSet(tags) {
+    return new Set((tags || []).map(normalizeTag));
+  }
+
+  function countTagOverlap(trackTags, selected) {
+    let overlap = 0;
+    for (const tag of selected) {
+      if (trackTags.has(tag)) overlap++;
+    }
+    return overlap;
+  }
+
+  function instrumentalPenalty(trackTags, selectedHasInstrumental, selectedHasVocal) {
+    if (!selectedHasInstrumental && !selectedHasVocal) return 1;
+    const trackHasInstrumental = [...trackTags].some((tag) => INSTRUMENTAL_TAGS.has(tag));
+    const trackHasVocal = [...trackTags].some((tag) => VOCAL_TAGS.has(tag));
+    if (selectedHasInstrumental && trackHasVocal && !trackHasInstrumental) return 0.3;
+    if (selectedHasInstrumental && trackHasVocal && trackHasInstrumental) return 0.7;
+    if (selectedHasVocal && trackHasInstrumental && !trackHasVocal) return 0.5;
+    return 1;
+  }
+
   // --- Mode toggle ---
   modeBtns.forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -78,19 +114,11 @@
       modeBtns.forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
       audioWeightsPanel.classList.toggle("hidden", mode !== "audio");
       filterPanel.classList.add("hidden");
+      traceHistory = [];
+      renderDrillPanel();
     });
   });
-
-  function setView(view) {
-    activeView = view;
-    viewBtns.forEach((b) => b.classList.toggle("active", b.dataset.view === view));
-    drillPanel.classList.toggle("hidden", view !== "drill");
-    if (view === "drill") renderDrillPanel();
-  }
-
-  viewBtns.forEach((btn) => {
-    btn.addEventListener("click", () => setView(btn.dataset.view));
-  });
+  audioWeightsPanel.classList.toggle("hidden", currentMode !== "audio");
 
   // --- Weight sliders ---
   weightRows.forEach((row) => {
@@ -115,6 +143,9 @@
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     await search();
+  });
+  reloadBtn.addEventListener("click", async () => {
+    await search({ preserveTrace: true });
   });
 
   bpmSlider.addEventListener("input", () => {
@@ -160,6 +191,11 @@
       discoverMoreBtn.disabled = false;
       discoverMoreBtn.textContent = "Discover More";
     }
+  });
+
+  drillCloseBtn.addEventListener("click", () => {
+    traceHistory = [];
+    renderDrillPanel();
   });
 
   function updateBpmLabel() {
@@ -230,17 +266,21 @@
   }
 
   function renderDrillPanel() {
-    if (activeView !== "drill") return;
     if (!traceHistory.length) {
       drillBreadcrumbs.innerHTML = "";
       drillProfile.textContent = "Select a result track using Drill to start narrowing.";
+      drillSideContent.innerHTML = "";
+      drillPanel.classList.add("hidden");
+      drillSidePanel.classList.add("hidden");
       return;
     }
+    drillPanel.classList.remove("hidden");
+    drillSidePanel.classList.remove("hidden");
     const avg = averageFeatures(traceHistory);
     const tags = intersectTags(traceHistory);
 
     drillBreadcrumbs.innerHTML = traceHistory
-      .map((t, i) => `<button class="crumb-btn ${i === traceHistory.length - 1 ? "active" : ""}" data-crumb="${i}">${esc(t.track.name)}</button>`)
+      .map((t, i) => `<button class="crumb-btn ${i === traceHistory.length - 1 ? "active" : ""}" data-crumb="${i}">${esc(t.track.name)}</button><button class="crumb-btn" data-remove-crumb="${i}" title="Remove step">×</button>`)
       .join("");
     drillProfile.innerHTML = `
       <div><strong>Narrowed Tags:</strong> ${tags.length ? tags.map((t) => esc(t)).join(", ") : "None"}</div>
@@ -248,11 +288,37 @@
         Energy ${fmtPct(avg.energy)} | Valence ${fmtPct(avg.valence)} | Dance ${fmtPct(avg.danceability)} | Acoustic ${fmtPct(avg.acousticness)} | Instrumental ${fmtPct(avg.instrumentalness)} | BPM ${fmtTempo(avg.tempo)}
       </div>
     `;
+    drillSideContent.innerHTML = `
+      <div class="drill-profile">${drillProfile.innerHTML}</div>
+      <div class="tag-sections">
+        ${traceHistory.map((entry, idx) => `
+          <div class="tag-section">
+            <label class="tag-section-label">Step ${idx + 1}</label>
+            <div class="track-card-tags">
+              <span class="track-tag">${esc(entry.track.name)}</span>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    `;
     drillBreadcrumbs.querySelectorAll(".crumb-btn").forEach((btn) => {
+      if (btn.dataset.crumb == null) return;
       btn.addEventListener("click", async () => {
         const idx = parseInt(btn.dataset.crumb, 10);
         traceHistory = traceHistory.slice(0, idx + 1);
         await runDrillSearch(traceHistory[idx].track);
+      });
+    });
+    drillBreadcrumbs.querySelectorAll("[data-remove-crumb]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const idx = parseInt(btn.dataset.removeCrumb, 10);
+        traceHistory = traceHistory.slice(0, idx);
+        if (traceHistory.length === 0) {
+          await search();
+          return;
+        }
+        const pivot = traceHistory[traceHistory.length - 1];
+        await runDrillSearch(pivot.track);
       });
     });
   }
@@ -287,11 +353,17 @@
     buildFilters();
     renderFiltered();
     updateActionsBar();
-    setView("drill");
     renderDrillPanel();
   }
 
-  async function search() {
+  function currentRequestLimit(excludeCount = 0) {
+    const base = Math.max(displayLimit, 50);
+    const multiplier = excludeCount > 0 ? 3 : 2;
+    return Math.min(base * multiplier, 250);
+  }
+
+  async function search(options = {}) {
+    const { preserveTrace = false } = options;
     const url = urlInput.value.trim();
     if (!url) return;
     displayLimit = parseInt(document.getElementById("limit").value, 10);
@@ -311,7 +383,7 @@
     seenTrackKeys.clear();
     exhausted = false;
     softFiltering = false;
-    if (activeView === "search") traceHistory = [];
+    if (!preserveTrace) traceHistory = [];
 
     try {
       let data;
@@ -332,6 +404,7 @@
       buildFilters();
       renderFiltered();
       updateActionsBar();
+      renderDrillPanel();
     } catch (err) {
       errorEl.textContent = err.message;
       errorEl.classList.remove("hidden");
@@ -342,10 +415,11 @@
   }
 
   async function fetchLastfmSimilar(url, exclude = []) {
+    const limit = currentRequestLimit(exclude.length);
     const resp = await fetch("/api/similar", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, limit: 50, exclude }),
+      body: JSON.stringify({ url, limit, exclude }),
     });
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({}));
@@ -355,10 +429,11 @@
   }
 
   async function fetchAudioSimilar(url, exclude = []) {
+    const limit = currentRequestLimit(exclude.length);
     const resp = await fetch("/api/similar/audio", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, limit: 50, weights: getWeights(), exclude }),
+      body: JSON.stringify({ url, limit, weights: getWeights(), exclude }),
     });
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({}));
@@ -370,11 +445,12 @@
   // --- Tag filter chips ---
   function addChipListeners(chip, tag) {
     chip.addEventListener("click", () => {
-      if (selectedTags.has(tag)) {
-        selectedTags.delete(tag);
+      const normalized = normalizeTag(tag);
+      if (selectedTags.has(normalized)) {
+        selectedTags.delete(normalized);
         chip.classList.remove("active");
       } else {
-        selectedTags.add(tag);
+        selectedTags.add(normalized);
         chip.classList.add("active");
       }
       softFiltering = false;
@@ -414,16 +490,17 @@
 
       quickFiltersEl.innerHTML = "";
       for (const preset of QUICK_FILTERS) {
-        const matchingTags = allPoolTags.filter((st) =>
-          preset.tags.some((pt) => st.includes(pt) || pt.includes(st))
-        );
+        const matchingTags = allPoolTags.filter((st) => {
+          const normalizedTag = normalizeTag(st);
+          return preset.tags.some((pt) => normalizeTag(pt) === normalizedTag);
+        });
         if (matchingTags.length === 0) continue;
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "quick-filter-btn";
         btn.textContent = preset.label;
         btn.addEventListener("click", () => {
-          matchingTags.forEach((t) => selectedTags.add(t));
+          matchingTags.forEach((t) => selectedTags.add(normalizeTag(t)));
           buildFilters();
           renderFiltered();
         });
@@ -452,7 +529,7 @@
           chip.type = "button";
           chip.className = "tag-chip";
           chip.textContent = tag;
-          if (selectedTags.has(tag)) chip.classList.add("active");
+          if (selectedTags.has(normalizeTag(tag))) chip.classList.add("active");
           addChipListeners(chip, tag);
           chipsWrap.appendChild(chip);
         }
@@ -471,6 +548,8 @@
     const bpmTol = parseInt(bpmSlider.value, 10);
     const hasBpmFilter = !softFiltering && seedTrack && seedTrack.bpm && bpmTol < 100;
     const hasTagFilter = selectedTags.size > 0;
+    const selectedHasInstrumental = [...selectedTags].some((tag) => INSTRUMENTAL_TAGS.has(tag));
+    const selectedHasVocal = [...selectedTags].some((tag) => VOCAL_TAGS.has(tag));
 
     return allTracks
       .map((t) => {
@@ -488,16 +567,14 @@
         }
 
         if (hasTagFilter) {
-          const trackTags = new Set(t.tags || []);
-          let overlap = 0;
-          for (const tag of selectedTags) {
-            if (trackTags.has(tag)) overlap++;
-          }
+          const trackTags = normalizedTagSet(t.tags || []);
+          const overlap = countTagOverlap(trackTags, selectedTags);
           if (overlap === 0) {
             score *= softFiltering ? 0.5 : 0;
           } else {
             score *= overlap / selectedTags.size;
           }
+          score *= instrumentalPenalty(trackTags, selectedHasInstrumental, selectedHasVocal);
         }
 
         return { ...t, _score: score };
@@ -596,6 +673,7 @@
   }
 
   function queueSummaryText(data) {
+    if (typeof data?.message === "string" && data.message) return data.message;
     const added = data?.added || 0;
     const failed = data?.failed || 0;
     if (failed > 0) {
@@ -605,9 +683,25 @@
   }
 
   function queueErrorText(data, fallbackStatus) {
-    if (data?.detail) return data.detail;
+    if (typeof data?.detail === "string") return data.detail;
+    const detail = typeof data?.detail === "object" && data?.detail ? data.detail : null;
+    if (detail?.message) {
+      const errors = Array.isArray(detail.errors) ? detail.errors : [];
+      if (errors.length === 0) return detail.message;
+      const list = errors
+        .slice(0, 2)
+        .map((e) => e?.message || e?.reason || "Unknown queue error")
+        .join(" | ");
+      const remaining = errors.length > 2 ? ` (+${errors.length - 2} more)` : "";
+      return `${detail.message} ${list}${remaining}`;
+    }
     if (Array.isArray(data?.errors) && data.errors.length > 0) {
-      return data.errors.map((e) => e?.reason || "Unknown queue error").join(" | ");
+      const list = data.errors
+        .slice(0, 2)
+        .map((e) => e?.message || e?.reason || "Unknown queue error")
+        .join(" | ");
+      const remaining = data.errors.length > 2 ? ` (+${data.errors.length - 2} more)` : "";
+      return `${list}${remaining}`;
     }
     return `Failed (${fallbackStatus})`;
   }
@@ -680,7 +774,7 @@
     const approxNote = approximated
       ? `<div class="approx-notice">Audio features estimated from tags (Spotify audio-features API unavailable for this app)</div>`
       : "";
-    let html = `<h3>Similar Tracks${countNote}</h3>${approxNote}`;
+    let html = `<h3>Cat ID Matches${countNote}</h3>${approxNote}`;
     tracks.forEach((t, idx) => {
       const previewBtn = t.preview_url
         ? `<button class="play-btn" data-url="${t.preview_url}" title="Preview">&#9654;</button>`
@@ -840,8 +934,8 @@
       return;
     }
     const name = seedTrack
-      ? `Similar to ${seedTrack.name} - ${seedTrack.artists[0]}`
-      : "Similar Tracks";
+      ? `Follow Your Cat ID - ${seedTrack.name} - ${seedTrack.artists[0]}`
+      : "Follow Your Cat ID";
     actionStatus.textContent = "Creating playlist...";
     savePlaylistBtn.disabled = true;
     try {

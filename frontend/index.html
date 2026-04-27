@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Similar Tracks Finder</title>
+  <title>Follow Your Cat ID</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="container">
     <header>
-      <h1>Similar Tracks Finder</h1>
-      <p class="subtitle">Paste a Spotify track link to find similar songs</p>
+      <h1>Follow Your Cat ID</h1>
+      <p class="subtitle">Track a Spotify track. Find your next Cat ID.</p>
     </header>
 
     <div id="spotify-auth" class="spotify-auth">
@@ -20,14 +20,12 @@
     </div>
 
     <div class="mode-toggle">
-      <button id="mode-lastfm" class="mode-btn active" data-mode="lastfm">Listener Similarity</button>
-      <button id="mode-audio" class="mode-btn" data-mode="audio">Audio Similarity</button>
+      <button id="mode-lastfm" class="mode-btn" data-mode="lastfm">Listener Similarity</button>
+      <button id="mode-audio" class="mode-btn active" data-mode="audio">Audio Similarity</button>
     </div>
-
-    <div class="view-toggle">
-      <button id="view-search" class="view-btn active" data-view="search">Search</button>
-      <button id="view-drill" class="view-btn" data-view="drill">Drill Down</button>
-    </div>
+    <p class="mode-help">
+      Listener similarity follows crowd listening patterns. Audio similarity matches sonic traits like BPM, energy, and instrumentalness.
+    </p>
 
     <form id="search-form">
       <div class="input-row">
@@ -38,15 +36,16 @@
           required
         />
         <button type="submit" id="search-btn">Find Similar</button>
+        <button type="button" id="reload-btn">Reload</button>
       </div>
 
       <div class="limit-row">
         <label for="limit">Results:</label>
         <select id="limit">
           <option value="5">5</option>
-          <option value="10" selected>10</option>
+          <option value="10">10</option>
           <option value="20">20</option>
-          <option value="50">50</option>
+          <option value="50" selected>50</option>
         </select>
       </div>
     </form>
@@ -90,6 +89,10 @@
     <div id="seed-track" class="seed-track hidden"></div>
 
     <div id="drill-panel" class="drill-panel hidden">
+      <div class="drill-panel-header">
+        <h3>Drill Trace</h3>
+        <button type="button" id="drill-close-btn" class="drill-close-btn">Close</button>
+      </div>
       <div id="drill-breadcrumbs" class="drill-breadcrumbs"></div>
       <div id="drill-profile" class="drill-profile"></div>
     </div>
@@ -121,7 +124,12 @@
       <span id="action-status" class="action-status"></span>
     </div>
 
-    <div id="results" class="results"></div>
+    <div class="results-layout">
+      <div id="results" class="results"></div>
+      <aside id="drill-side-panel" class="drill-side-panel hidden">
+        <div id="drill-side-content"></div>
+      </aside>
+    </div>
     <button id="discover-more-btn" class="discover-more-btn hidden">Discover More</button>
     <div id="error" class="error hidden"></div>
     <div id="loading" class="loading hidden">

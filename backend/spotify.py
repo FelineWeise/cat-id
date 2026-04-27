@@ -1,6 +1,7 @@
 import logging
 import math
 import re
+from functools import lru_cache
 
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
@@ -23,6 +24,7 @@ TRACK_URI_PATTERN = re.compile(r"spotify:track:([a-zA-Z0-9]+)")
 TARGET_THRESHOLD = 0.3
 
 
+@lru_cache(maxsize=1)
 def get_spotify_client() -> spotipy.Spotify:
     if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
         raise ValueError(
@@ -78,6 +80,11 @@ def get_track_info(url_or_uri: str) -> TrackInfo:
 
 def search_track(artist: str, track_name: str) -> TrackInfo | None:
     """Search Spotify for a track by artist + name. Returns metadata or None."""
+    return _search_track_cached(artist.strip().lower(), track_name.strip().lower())
+
+
+@lru_cache(maxsize=1024)
+def _search_track_cached(artist: str, track_name: str) -> TrackInfo | None:
     sp = get_spotify_client()
     query = f"artist:{artist} track:{track_name}"
     results = sp.search(q=query, type="track", limit=1)

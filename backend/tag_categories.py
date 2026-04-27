@@ -12,12 +12,21 @@ fallback when Spotify's audio-features endpoint is unavailable.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from backend.models import AudioFeatures
 
 TagCategory = Literal["mood", "genre", "vocals_instrumentals"]
+
+_WHITESPACE_RE = re.compile(r"\s+")
+
+TAG_ALIASES: dict[str, str] = {
+    "female vocals": "female vocal",
+    "male vocals": "male vocal",
+    "no vocals": "no vocal",
+}
 
 TAG_TO_CATEGORY: dict[str, TagCategory] = {
     "chill": "mood",
@@ -55,6 +64,9 @@ TAG_TO_CATEGORY: dict[str, TagCategory] = {
 }
 
 DEFAULT_CATEGORY: TagCategory = "genre"
+
+INSTRUMENTAL_TAGS = {"instrumental", "no vocal"}
+VOCAL_TAGS = {"vocal", "vocals", "female vocal", "male vocal"}
 
 # ---------------------------------------------------------------------------
 # Tag → approximate audio-feature signals
@@ -139,7 +151,7 @@ _ESTIMABLE_DIMS = ("energy", "valence", "danceability", "acousticness", "instrum
 
 def get_category(tag: str) -> TagCategory:
     """Return the category for a tag (lowercase). Unknown tags map to genre."""
-    return TAG_TO_CATEGORY.get(tag.strip().lower(), DEFAULT_CATEGORY)
+    return TAG_TO_CATEGORY.get(normalize_tag(tag), DEFAULT_CATEGORY)
 
 
 def build_tag_categories(tags: list[str]) -> dict[str, str]:
@@ -147,10 +159,16 @@ def build_tag_categories(tags: list[str]) -> dict[str, str]:
     return {tag: get_category(tag) for tag in tags}
 
 
+def normalize_tag(tag: str) -> str:
+    """Normalize tags for stable matching across UI and backend rules."""
+    normalized = _WHITESPACE_RE.sub(" ", tag.strip().lower())
+    return TAG_ALIASES.get(normalized, normalized)
+
+
 def _collect_signals(tag: str, sums: dict[str, float], counts: dict[str, int]) -> None:
     """Accumulate feature signals for a tag. For compound tags like 'ambient house',
     also checks individual words so partial matches contribute."""
-    key = tag.strip().lower()
+    key = normalize_tag(tag)
     signals = TAG_FEATURE_SIGNALS.get(key)
     if signals:
         for dim, val in signals.items():

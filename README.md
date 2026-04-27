@@ -1,4 +1,4 @@
-# Similar Tracks Finder
+# Follow Your Cat ID
 
 A web app that finds songs similar to a given Spotify track using two discovery modes: **Listener Similarity** (Last.fm collaborative filtering) and **Audio Similarity** (Spotify audio features + recommendations with configurable dimension weights).
 
@@ -12,6 +12,12 @@ A web app that finds songs similar to a given Spotify track using two discovery 
 - **30-second preview playback** via Deezer (fallback when Spotify previews are unavailable)
 - **Spotify integration** — album art, direct links, playlist creation, and queue control (requires OAuth)
 - Configurable result count (5 / 10 / 20 / 50)
+
+### Listener vs Audio Similarity
+
+- **Listener Similarity:** finds tracks that people who listen to the seed track also tend to play; this is crowd/listening-pattern based.
+- **Audio Similarity:** finds tracks that sound close to the seed by comparing sonic features (tempo, energy, valence, danceability, acousticness, instrumentalness).
+- If Spotify audio-features access is unavailable, audio mode uses tag-based approximation and marks responses as approximated.
 
 ## Prerequisites
 

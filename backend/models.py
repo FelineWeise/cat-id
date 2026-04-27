@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 class TrackRequest(BaseModel):
     url: str = Field(description="Spotify track URL or URI")
-    limit: int = Field(default=10, ge=1, le=50, description="Number of similar tracks to return")
+    limit: int = Field(default=10, ge=1, le=250, description="Number of similar tracks to return")
     exclude: list[str] = Field(
         default_factory=list,
         description="Lowercased 'artist::trackname' keys to exclude from results",
@@ -34,7 +34,7 @@ class AudioWeights(BaseModel):
 
 class AudioSimilarRequest(BaseModel):
     url: str = Field(description="Spotify track URL or URI")
-    limit: int = Field(default=20, ge=1, le=50, description="Number of similar tracks to return")
+    limit: int = Field(default=20, ge=1, le=250, description="Number of similar tracks to return")
     weights: AudioWeights = Field(default_factory=AudioWeights)
     exclude: list[str] = Field(
         default_factory=list,
