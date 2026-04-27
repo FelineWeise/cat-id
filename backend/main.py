@@ -65,6 +65,7 @@ OVERFETCH_LIMIT = 50
 MAX_ENRICH_CONCURRENCY = 10
 MIN_FETCH_MULTIPLIER = 2
 MAX_FETCH_MULTIPLIER = 3
+FULL_TAG_ENRICH_LIMIT = 25
 
 logger = logging.getLogger(__name__)
 _shared_http_client: httpx.AsyncClient | None = None
@@ -149,18 +150,20 @@ async def _enrich_lastfm(
 
     semaphore = asyncio.Semaphore(MAX_ENRICH_CONCURRENCY)
 
-    async def enrich(item: dict) -> TrackInfo | None:
+    async def enrich(item: dict, include_tags: bool) -> TrackInfo | None:
         artist_name = item["artist"]
         track_name = item["name"]
         match_score = item["match"]
 
         async with semaphore:
             try:
-                sp_track, dz_info, tags = await asyncio.gather(
+                sp_track, dz_info = await asyncio.gather(
                     asyncio.to_thread(search_track, artist_name, track_name),
                     deezer_fetch(client, artist_name, track_name),
-                    fetch_track_tags(client, artist_name, track_name),
                 )
+                tags: list[str] = []
+                if include_tags:
+                    tags = await fetch_track_tags(client, artist_name, track_name)
             except Exception:
                 logger.warning("Failed to enrich '%s - %s'", artist_name, track_name)
                 return None
@@ -185,7 +188,11 @@ async def _enrich_lastfm(
             tags=[normalize_tag(tag) for tag in tags],
         )
 
-    results = await asyncio.gather(*(enrich(item) for item in lastfm_results))
+    top_batch = lastfm_results[:FULL_TAG_ENRICH_LIMIT]
+    tail_batch = lastfm_results[FULL_TAG_ENRICH_LIMIT:]
+    top_results = await asyncio.gather(*(enrich(item, include_tags=True) for item in top_batch))
+    tail_results = await asyncio.gather(*(enrich(item, include_tags=False) for item in tail_batch))
+    results = [*top_results, *tail_results]
 
     return [r for r in results if r is not None], [normalize_tag(tag) for tag in seed_tags]
 

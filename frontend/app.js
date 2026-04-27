@@ -358,8 +358,10 @@
 
   function currentRequestLimit(excludeCount = 0) {
     const base = Math.max(displayLimit, 50);
-    const multiplier = excludeCount > 0 ? 3 : 2;
-    return Math.min(base * multiplier, 250);
+    if (excludeCount > 0) {
+      return Math.min(base + 25, 100);
+    }
+    return Math.min(base, 60);
   }
 
   async function search(options = {}) {

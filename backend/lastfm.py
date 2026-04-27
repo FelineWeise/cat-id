@@ -9,7 +9,7 @@ from backend.config import LASTFM_API_KEY
 logger = logging.getLogger(__name__)
 
 LASTFM_BASE = "https://ws.audioscrobbler.com/2.0/"
-_sem = asyncio.Semaphore(2)
+_sem = asyncio.Semaphore(4)
 
 
 def _check_key():
@@ -196,7 +196,7 @@ async def fetch_track_tags(client: httpx.AsyncClient, artist: str, track: str) -
             data = await _lastfm_aget(client, {"method": "track.gettoptags", "artist": artist, "track": track})
             tags = _parse_tags(data)
             if tags:
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(0.05)
                 return tags
         except Exception:
             logger.warning("Failed to fetch tags for '%s - %s'", artist, track, exc_info=True)
@@ -204,7 +204,7 @@ async def fetch_track_tags(client: httpx.AsyncClient, artist: str, track: str) -
         try:
             data = await _lastfm_aget(client, {"method": "artist.gettoptags", "artist": artist})
             tags = _parse_tags(data)
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.05)
             return tags
         except Exception:
             logger.warning("Failed to fetch artist tags for '%s'", artist, exc_info=True)
