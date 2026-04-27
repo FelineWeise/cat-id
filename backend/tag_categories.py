@@ -206,3 +206,13 @@ def estimate_features_from_tags(tags: list[str], bpm: float | None = None) -> Au
         values[dim] = sums[dim] / counts[dim] if counts[dim] else 0.5
 
     return AF(**values)
+
+
+def tag_alignment_score(seed_tags: list[str], candidate_tags: list[str]) -> float:
+    """Return normalized alignment score between seed and candidate tags (0..1)."""
+    seed_norm = {normalize_tag(tag) for tag in seed_tags if tag.strip()}
+    cand_norm = {normalize_tag(tag) for tag in candidate_tags if tag.strip()}
+    if not seed_norm or not cand_norm:
+        return 0.0
+    overlap = len(seed_norm & cand_norm)
+    return overlap / max(1, min(len(seed_norm), 8))

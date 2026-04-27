@@ -796,6 +796,9 @@
         spotifyConnected && t.spotify_id
           ? `<button class="queue-btn" data-uri="spotify:track:${t.spotify_id}" title="Add to queue">+Q</button>`
           : "";
+      const mappingNote = !t.spotify_id
+        ? `<div class="detail">No Spotify match found for queue/playlist actions yet.</div>`
+        : "";
       const drillBtn =
         t.spotify_url
           ? `<button class="drill-btn" data-drill-idx="${idx}" title="Drill down with this track">Drill</button>`
@@ -806,6 +809,7 @@
           <div class="track-info">
             <div class="name">${nameLink}</div>
             <div class="detail">${esc(t.artists.join(", "))}${t.album ? " &mdash; " + esc(t.album) : ""}</div>
+            ${mappingNote}
             ${trackTags}
             ${afHtml}
           </div>

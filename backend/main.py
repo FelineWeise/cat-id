@@ -46,6 +46,7 @@ from backend.tag_categories import (
     build_tag_categories,
     estimate_features_from_tags,
     normalize_tag,
+    tag_alignment_score,
 )
 
 app = FastAPI(
@@ -69,6 +70,9 @@ MIN_FETCH_MULTIPLIER = 2
 MAX_FETCH_MULTIPLIER = 3
 FULL_TAG_ENRICH_LIMIT = 25
 ENRICH_TIME_BUDGET_SECONDS = 12.0
+SPOTIFY_ENRICH_SEED_WEIGHT = 0.7
+TAG_ALIGNMENT_WEIGHT = 0.25
+DEEZER_SIGNAL_WEIGHT = 0.05
 
 logger = logging.getLogger(__name__)
 _shared_http_client: httpx.AsyncClient | None = None
@@ -151,6 +155,17 @@ async def _enrich_lastfm(
     if not seed.preview_url:
         seed.preview_url = seed_deezer.get("preview")
 
+    seed_tag_list = [normalize_tag(tag) for tag in seed_tags]
+
+    def fused_similarity_score(lastfm_match: float, tags: list[str], deezer_info: dict) -> float:
+        seed_component = max(0.0, min(lastfm_match, 1.0)) * SPOTIFY_ENRICH_SEED_WEIGHT
+        tag_component = tag_alignment_score(seed_tag_list, tags) * TAG_ALIGNMENT_WEIGHT
+        deezer_component = (
+            (0.5 if deezer_info.get("bpm") is not None else 0.0)
+            + (0.5 if deezer_info.get("preview") else 0.0)
+        ) * DEEZER_SIGNAL_WEIGHT
+        return min(1.0, seed_component + tag_component + deezer_component)
+
     semaphore = asyncio.Semaphore(MAX_ENRICH_CONCURRENCY)
     enrich_deadline = time.monotonic() + ENRICH_TIME_BUDGET_SECONDS
 
@@ -175,10 +190,13 @@ async def _enrich_lastfm(
                 logger.warning("Failed to enrich '%s - %s'", artist_name, track_name)
                 return None
 
+        normalized_tags = [normalize_tag(tag) for tag in tags]
+        fused_score = fused_similarity_score(match_score, normalized_tags, dz_info)
         if sp_track:
-            sp_track.match_score = match_score
+            sp_track.match_score = fused_score
             sp_track.bpm = dz_info.get("bpm")
-            sp_track.tags = [normalize_tag(tag) for tag in tags]
+            sp_track.tags = normalized_tags
+            sp_track.spotify_mapping_status = "mapped"
             if not sp_track.preview_url:
                 sp_track.preview_url = dz_info.get("preview")
             return sp_track
@@ -190,9 +208,10 @@ async def _enrich_lastfm(
             album_art=item.get("image"),
             preview_url=dz_info.get("preview"),
             spotify_url=None,
-            match_score=match_score,
+            match_score=fused_score,
             bpm=dz_info.get("bpm"),
-            tags=[normalize_tag(tag) for tag in tags],
+            tags=normalized_tags,
+            spotify_mapping_status="unmapped",
         )
 
     top_batch = lastfm_results[:FULL_TAG_ENRICH_LIMIT]
@@ -223,6 +242,15 @@ def _instrumental_bias_score(track: TrackInfo) -> float:
     return 0.25
 
 
+def _fused_rank_value(track: TrackInfo) -> tuple[float, float, float]:
+    mapping_boost = 0.05 if track.spotify_id else 0.0
+    return (
+        (track.match_score or 0.0) + mapping_boost,
+        _instrumental_bias_score(track),
+        1.0 if track.preview_url else 0.0,
+    )
+
+
 @app.post("/api/similar", response_model=SimilarTracksResponse)
 async def api_similar(req: TrackRequest):
     try:
@@ -245,6 +273,7 @@ async def api_similar(req: TrackRequest):
         all_tags.update(t.tags or [])
     tag_categories = build_tag_categories(list(all_tags))
 
+    similar.sort(key=_fused_rank_value, reverse=True)
     return SimilarTracksResponse(
         seed_track=seed,
         similar_tracks=similar,
@@ -352,10 +381,7 @@ async def _audio_fallback_path(
         if track.audio_features and seed_features:
             track.match_score = compute_similarity(seed_features, track.audio_features, req.weights)
 
-    similar.sort(
-        key=lambda t: ((t.match_score or 0), _instrumental_bias_score(t)),
-        reverse=True,
-    )
+    similar.sort(key=_fused_rank_value, reverse=True)
 
     all_tags: set[str] = set(seed_tags)
     for t in similar:

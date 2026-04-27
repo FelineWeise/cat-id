@@ -50,6 +50,7 @@ class TrackInfo(BaseModel):
     preview_url: str | None = None
     spotify_url: str | None = None
     spotify_id: str | None = None
+    spotify_mapping_status: str = "mapped"
     match_score: float | None = None
     bpm: float | None = None
     tags: list[str] = []
