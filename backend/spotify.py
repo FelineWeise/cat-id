@@ -1,6 +1,7 @@
 import logging
 import math
 import re
+import time
 from functools import lru_cache
 
 import spotipy
@@ -22,6 +23,18 @@ TRACK_URL_PATTERN = re.compile(
 TRACK_URI_PATTERN = re.compile(r"spotify:track:([a-zA-Z0-9]+)")
 
 TARGET_THRESHOLD = 0.3
+SPOTIFY_RATE_LIMIT_COOLDOWN_SECONDS = 180
+_spotify_throttled_until = 0.0
+
+
+def _set_spotify_throttled(retry_after_seconds: int | None = None) -> None:
+    global _spotify_throttled_until
+    cooldown = retry_after_seconds or SPOTIFY_RATE_LIMIT_COOLDOWN_SECONDS
+    _spotify_throttled_until = max(_spotify_throttled_until, time.monotonic() + max(1, cooldown))
+
+
+def spotify_search_allowed() -> bool:
+    return time.monotonic() >= _spotify_throttled_until
 
 
 @lru_cache(maxsize=1)
@@ -35,7 +48,12 @@ def get_spotify_client() -> spotipy.Spotify:
         client_id=SPOTIFY_CLIENT_ID,
         client_secret=SPOTIFY_CLIENT_SECRET,
     )
-    return spotipy.Spotify(auth_manager=auth_manager)
+    return spotipy.Spotify(
+        auth_manager=auth_manager,
+        retries=0,
+        status_retries=0,
+        backoff_factor=0,
+    )
 
 
 def extract_track_id(url_or_uri: str) -> str:
@@ -85,9 +103,23 @@ def search_track(artist: str, track_name: str) -> TrackInfo | None:
 
 @lru_cache(maxsize=1024)
 def _search_track_cached(artist: str, track_name: str) -> TrackInfo | None:
+    if not spotify_search_allowed():
+        return None
     sp = get_spotify_client()
     query = f"artist:{artist} track:{track_name}"
-    results = sp.search(q=query, type="track", limit=1)
+    try:
+        results = sp.search(q=query, type="track", limit=1)
+    except spotipy.SpotifyException as exc:
+        if exc.http_status == 429:
+            retry_after = None
+            try:
+                retry_after = int(exc.headers.get("Retry-After", "0")) if exc.headers else None
+            except Exception:
+                retry_after = None
+            _set_spotify_throttled(retry_after)
+            logger.warning("Spotify search throttled; entering cooldown.")
+            return None
+        raise
     items = results.get("tracks", {}).get("items", [])
     if not items:
         return None

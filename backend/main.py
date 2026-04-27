@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import secrets
+import time
 from collections.abc import Sequence
 
 import httpx
@@ -31,6 +32,7 @@ from backend.spotify import (
     get_recommendations,
     get_track_info,
     search_track,
+    spotify_search_allowed,
 )
 from backend.spotify_auth import (
     exchange_code,
@@ -66,6 +68,7 @@ MAX_ENRICH_CONCURRENCY = 10
 MIN_FETCH_MULTIPLIER = 2
 MAX_FETCH_MULTIPLIER = 3
 FULL_TAG_ENRICH_LIMIT = 25
+ENRICH_TIME_BUDGET_SECONDS = 12.0
 
 logger = logging.getLogger(__name__)
 _shared_http_client: httpx.AsyncClient | None = None
@@ -149,6 +152,7 @@ async def _enrich_lastfm(
         seed.preview_url = seed_deezer.get("preview")
 
     semaphore = asyncio.Semaphore(MAX_ENRICH_CONCURRENCY)
+    enrich_deadline = time.monotonic() + ENRICH_TIME_BUDGET_SECONDS
 
     async def enrich(item: dict, include_tags: bool) -> TrackInfo | None:
         artist_name = item["artist"]
@@ -157,12 +161,15 @@ async def _enrich_lastfm(
 
         async with semaphore:
             try:
+                sp_track_task = asyncio.to_thread(search_track, artist_name, track_name)
+                if not spotify_search_allowed() or time.monotonic() >= enrich_deadline:
+                    sp_track_task = asyncio.sleep(0, result=None)
                 sp_track, dz_info = await asyncio.gather(
-                    asyncio.to_thread(search_track, artist_name, track_name),
+                    sp_track_task,
                     deezer_fetch(client, artist_name, track_name),
                 )
                 tags: list[str] = []
-                if include_tags:
+                if include_tags and time.monotonic() < enrich_deadline:
                     tags = await fetch_track_tags(client, artist_name, track_name)
             except Exception:
                 logger.warning("Failed to enrich '%s - %s'", artist_name, track_name)
