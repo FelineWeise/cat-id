@@ -50,7 +50,12 @@ def exchange_code(code: str) -> dict:
 
 def get_user_client(access_token: str) -> spotipy.Spotify:
     """Return a Spotify client authenticated with the user's access token."""
-    return spotipy.Spotify(auth=access_token)
+    return spotipy.Spotify(
+        auth=access_token,
+        retries=0,
+        status_retries=0,
+        backoff_factor=0,
+    )
 
 
 def refresh_if_needed(token_info: dict) -> dict:

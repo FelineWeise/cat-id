@@ -74,15 +74,15 @@ app.add_middleware(
 
 BASE_OVERFETCH_FACTOR = 2
 MAX_OVERFETCH_LIMIT = 120
-MAX_ENRICH_CONCURRENCY = 10
+MAX_ENRICH_CONCURRENCY = 8
 MIN_FETCH_MULTIPLIER = 2
 MAX_FETCH_MULTIPLIER = 3
-FULL_TAG_ENRICH_LIMIT = 25
-ENRICH_TIME_BUDGET_SECONDS = 12.0
-SPOTIFY_RESOLVE_BUDGET = 72
-MB_FALLBACK_CAP = 28
+FULL_TAG_ENRICH_LIMIT = 18
+ENRICH_TIME_BUDGET_SECONDS = 8.0
+SPOTIFY_RESOLVE_BUDGET = 48
+MB_FALLBACK_CAP = 18
 STRICT_MAPPED_FETCH_MULT = 5
-EXTERNAL_LINKS_ENRICH_CAP = 40
+EXTERNAL_LINKS_ENRICH_CAP = 20
 SPOTIFY_ENRICH_SEED_WEIGHT = 0.7
 TAG_ALIGNMENT_WEIGHT = 0.25
 DEEZER_SIGNAL_WEIGHT = 0.05
@@ -486,8 +486,9 @@ def _get_mapping_user_sp(request: Request):
 
 @app.post("/api/similar", response_model=SimilarTracksResponse)
 async def api_similar(req: TrackRequest, request: Request):
+    mapping_user_sp = _get_mapping_user_sp(request)
     try:
-        seed = await asyncio.to_thread(get_track_info, req.url)
+        seed = await asyncio.to_thread(get_track_info, req.url, mapping_user_sp)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -495,7 +496,6 @@ async def api_similar(req: TrackRequest, request: Request):
 
     exclude = set(req.exclude) if req.exclude else None
     fetch_limit = _listener_fetch_limit(req.limit, req.strict_mapped_only)
-    mapping_user_sp = _get_mapping_user_sp(request)
     try:
         similar, seed_tags, mapping_degraded_reason, external_links_degraded_reason = await _enrich_lastfm(
             seed,
@@ -535,9 +535,10 @@ async def api_similar_audio(req: AudioSimilarRequest, request: Request):
     Falls back to Last.fm candidates + tag-estimated features when the
     Spotify endpoints return 403 (restricted app).
     """
+    mapping_user_sp = _get_mapping_user_sp(request)
     # 1. Resolve seed track
     try:
-        seed = await asyncio.to_thread(get_track_info, req.url)
+        seed = await asyncio.to_thread(get_track_info, req.url, mapping_user_sp)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -549,8 +550,14 @@ async def api_similar_audio(req: AudioSimilarRequest, request: Request):
     # 2. Try Spotify audio-features for the seed
     seed_features = None
     spotify_available = False
+    feature_source = "user" if mapping_user_sp is not None else "app"
     try:
-        features_map = await asyncio.to_thread(get_audio_features, [seed.spotify_id])
+        features_map = await asyncio.to_thread(
+            get_audio_features,
+            [seed.spotify_id],
+            mapping_user_sp,
+            source=feature_source,
+        )
         seed_features = features_map.get(seed.spotify_id)
         spotify_available = seed_features is not None
     except ValueError:
@@ -559,13 +566,16 @@ async def api_similar_audio(req: AudioSimilarRequest, request: Request):
         logger.warning("Audio features fetch failed: %s", exc)
 
     if spotify_available:
-        return await _audio_spotify_path(seed, seed_features, req)
+        return await _audio_spotify_path(seed, seed_features, req, mapping_user_sp)
 
     return await _audio_fallback_path(seed, req, request)
 
 
 async def _audio_spotify_path(
-    seed: TrackInfo, seed_features, req: AudioSimilarRequest,
+    seed: TrackInfo,
+    seed_features,
+    req: AudioSimilarRequest,
+    user_sp=None,
 ) -> SimilarTracksResponse:
     """Spotify-native path: recommendations + real audio features."""
     seed.audio_features = seed_features
@@ -573,9 +583,15 @@ async def _audio_spotify_path(
 
     targets = build_recommendation_targets(seed_features, req.weights)
 
+    feature_source = "user" if user_sp is not None else "app"
     try:
         candidates = await asyncio.to_thread(
-            get_recommendations, seed.spotify_id, targets, min(req.limit * 2, 100),
+            get_recommendations,
+            seed.spotify_id,
+            targets,
+            min(req.limit * 2, 100),
+            user_sp,
+            source=feature_source,
         )
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
@@ -593,7 +609,12 @@ async def _audio_spotify_path(
 
     candidate_ids = [t.spotify_id for t in candidates if t.spotify_id]
     try:
-        cand_features = await asyncio.to_thread(get_audio_features, candidate_ids)
+        cand_features = await asyncio.to_thread(
+            get_audio_features,
+            candidate_ids,
+            user_sp,
+            source=feature_source,
+        )
     except Exception:
         cand_features = {}
 

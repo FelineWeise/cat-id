@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from functools import lru_cache
 
 import httpx
@@ -12,6 +13,8 @@ from backend.http_policy import aget_json_with_policy
 ODESLI_LINKS_BY_SONG = "https://api.song.link/v1-alpha.1/links"
 ODESLI_TIMEOUT = 6
 ODESLI_ATTEMPTS = 2
+ODESLI_COOLDOWN_SECONDS = 120
+_odesli_throttled_until = 0.0
 
 PROVIDER_WHITELIST = {
     "youtube",
@@ -69,7 +72,7 @@ def _extract_provider_links(payload: dict) -> dict[str, str]:
 
 
 def _choose_primary_provider(links: dict[str, str]) -> str | None:
-    for candidate in ("youtube_music", "youtube", "deezer", "apple_music", "soundcloud", "tidal"):
+    for candidate in ("soundcloud", "youtube_music", "youtube", "deezer", "apple_music", "tidal"):
         if candidate in links:
             return candidate
     return next(iter(links.keys()), None)
@@ -95,7 +98,10 @@ async def resolve_external_links(
     Returns (provider_links, primary_provider). Never raises.
     """
     key = build_external_lookup_key(artist, title, isrc)
+    global _odesli_throttled_until
     try:
+        if time.monotonic() < _odesli_throttled_until:
+            return _cached_empty(key)
         params: dict[str, str] = {}
         if spotify_id and spotify_id.strip():
             params = {
@@ -121,5 +127,12 @@ async def resolve_external_links(
         if not links:
             return _cached_empty(key)
         return links, _choose_primary_provider(links)
+    except httpx.HTTPStatusError as exc:
+        if exc.response is not None and exc.response.status_code == 429:
+            _odesli_throttled_until = max(
+                _odesli_throttled_until,
+                time.monotonic() + ODESLI_COOLDOWN_SECONDS,
+            )
+        return _cached_empty(key)
     except Exception:
         return _cached_empty(key)

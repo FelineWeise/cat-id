@@ -14,6 +14,7 @@ A web app that finds songs similar to a given Spotify track using two discovery 
 - **Provider-routed queue** — select queue provider in-app:
   - `Spotify` (when connected) routes queue actions to your Spotify account queue
   - external providers route actions to local external queue + provider links (Song.link/Odesli)
+- **Queue export actions** — export local external queue as `playlist-export.txt` and open Spotlistr text importer
 - Configurable result count (5 / 10 / 20 / 50)
 
 ### Listener vs Audio Similarity
@@ -23,7 +24,7 @@ A web app that finds songs similar to a given Spotify track using two discovery 
 - If Spotify audio-features access is unavailable, audio mode uses tag-based approximation and marks responses as approximated.
 - **Optional strict Spotify-only results:** set `strict_mapped_only` to `true` on `/api/similar` and `/api/similar/audio` to return only tracks with a `spotify_id` (every listed row is queue/playlist-safe). Default is `false` so you still see Last.fm-style matches even when Spotify mapping fails for some rows; queue/playlist actions only use mapped URIs.
 - Optional **MusicBrainz** hints (`use_metadata_fallback`, default `true`) retry Spotify resolution when Deezer/Spotify text matching fails, including URL relation extraction for direct Spotify track IDs when available.
-- If the user is connected to Spotify, mapping search prefers the user token path and then falls back to app-token search; anonymous users use app-token search only.
+- If the user is connected to Spotify, mapping/search calls use the user token path; anonymous users use app-token mapping.
 
 ## Prerequisites
 
@@ -98,6 +99,40 @@ Useful local overrides:
 - Queue behavior is provider-routed from the queue area:
   - If provider is Spotify and you're connected, both single-track and bulk `Add to Queue` use `/api/spotify/queue`.
   - If provider is external, queue actions add tracks to local browser queue and open provider links.
+  - External provider resolution uses selected provider first, then track primary provider, then fallback priority: `soundcloud > youtube_music > youtube > deezer`.
+
+## Rate limits and auth notes
+
+### Spotify endpoints currently used
+
+- Seed metadata: `GET /v1/tracks/{id}`
+- Mapping: `GET /v1/search` (text + ISRC patterns), optional `GET /v1/tracks/{id}` for hint IDs
+- Audio mode: `GET /v1/audio-features?ids=...` (batched), `GET /v1/recommendations`
+- Auth/session UX: `GET /v1/me`
+- User actions: queue + playlist endpoints via user-scoped OAuth client
+
+### External high-volume endpoints in enrichment flow
+
+- Last.fm similarity + tags (`track.getsimilar`, `track.gettoptags`, `artist.gettoptags`, artist fallback endpoints)
+- Deezer track lookup/search for preview + ISRC signals
+- MusicBrainz recording/ISRC hints for mapping retries
+- Song.link/Odesli provider-link lookup for external playback
+
+### Mitigations in code
+
+- Debounced live search in frontend (400ms) with `AbortController` cancellation for stale requests
+- Memoized Spotify mapping helpers to avoid repeated deterministic lookups
+- Batched Spotify audio-features requests (`ids` batches up to 100)
+- Retry/backoff with Retry-After awareness for HTTP providers, but capped wait windows to avoid request hangs
+- Per-request enrichment budgets/caps to return degraded results quickly instead of timing out
+- Spotipy retries disabled on app and user clients so throttled calls fail fast and use cooldown/degraded paths
+
+### Can we “reset” or rotate Spotify rate limits?
+
+- No clean/safe reset exists from app code.
+- Rotating client-credentials tokens does not reliably produce a fresh quota window for the same app.
+- Cycling user tokens is not a valid rate-limit bypass and can create instability.
+- Practical strategy is request shaping: lower fan-out, cache/batch, honor 429 `Retry-After`, and return degraded responses quickly.
 
 ## Local dev without a public URL
 

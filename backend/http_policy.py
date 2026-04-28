@@ -6,11 +6,12 @@ import httpx
 
 
 RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+MAX_RETRY_AFTER_SECONDS = 1.5
 
 
 def _retry_delay(attempt: int, retry_after: float | None = None) -> float:
     if retry_after is not None and retry_after > 0:
-        return retry_after
+        return min(MAX_RETRY_AFTER_SECONDS, retry_after)
     base = 0.25 * (2 ** attempt)
     jitter = random.uniform(0.0, 0.15)
     return min(2.0, base + jitter)

@@ -819,6 +819,8 @@ header h1 {
 }
 
 .action-btn {
+  display: inline-flex;
+  align-items: center;
   padding: 0.45rem 0.85rem;
   border: 1px solid var(--accent);
   border-radius: 20px;
@@ -826,6 +828,7 @@ header h1 {
   color: var(--accent);
   font-size: 0.82rem;
   font-weight: 600;
+  text-decoration: none;
   cursor: pointer;
   transition: all 0.15s;
 }

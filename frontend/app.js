@@ -24,6 +24,7 @@
   const externalPrevBtn = document.getElementById("external-prev-btn");
   const externalNextBtn = document.getElementById("external-next-btn");
   const externalClearBtn = document.getElementById("external-clear-btn");
+  const exportQueueTextBtn = document.getElementById("export-queue-text-btn");
   const externalQueueStatus = document.getElementById("external-queue-status");
   const externalQueueList = document.getElementById("external-queue-list");
   const spotifyLoginBtn = document.getElementById("spotify-login-btn");
@@ -69,10 +70,13 @@
   let lastSeedKey = "";
   let externalQueueAutoAdvanceTimer = null;
   let selectedQueueProvider = "youtube_music";
+  let liveSearchTimer = null;
+  let lastAutoSearchQuery = "";
 
   const EXTERNAL_QUEUE_KEY = "catid_external_queue_v1";
   const EXTERNAL_PROVIDER_KEY = "catid_external_provider_pref";
   const EXTERNAL_AUTO_ADVANCE_MS = 10000;
+  const LIVE_SEARCH_DEBOUNCE_MS = 400;
   const SPOTIFY_PROVIDER = "spotify";
 
   const discoverMoreBtn = document.getElementById("discover-more-btn");
@@ -143,7 +147,16 @@
     const links = item?.links || {};
     const preferred = preferredProvider && links[preferredProvider] ? preferredProvider : null;
     const primary = item?.primary_provider && links[item.primary_provider] ? item.primary_provider : null;
-    const fallbackProvider = Object.keys(links)[0] || null;
+    const fallbackOrder = [
+      "soundcloud",
+      "youtube_music",
+      "youtube",
+      "deezer",
+      "apple_music",
+      "tidal",
+    ];
+    const fallbackProvider =
+      fallbackOrder.find((providerKey) => Boolean(links[providerKey])) || Object.keys(links)[0] || null;
     const provider = preferred || primary || fallbackProvider;
     return {
       provider,
@@ -307,6 +320,10 @@
   // --- Form ---
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (liveSearchTimer) {
+      window.clearTimeout(liveSearchTimer);
+      liveSearchTimer = null;
+    }
     await search();
   });
   reloadBtn.addEventListener("click", async () => {
@@ -316,6 +333,30 @@
       return;
     }
     await search();
+  });
+
+  function isLikelySpotifyTrackInput(value) {
+    const trimmed = (value || "").trim();
+    if (!trimmed) return false;
+    if (trimmed.includes("open.spotify.com/track/")) return true;
+    if (trimmed.startsWith("spotify:track:")) return true;
+    return /^[a-zA-Z0-9]{22}$/.test(trimmed);
+  }
+
+  urlInput.addEventListener("input", () => {
+    if (liveSearchTimer) {
+      window.clearTimeout(liveSearchTimer);
+    }
+    const candidate = urlInput.value.trim();
+    if (!isLikelySpotifyTrackInput(candidate)) {
+      return;
+    }
+    liveSearchTimer = window.setTimeout(async () => {
+      if (!isLikelySpotifyTrackInput(candidate)) return;
+      if (candidate === lastAutoSearchQuery && allTracks.length > 0) return;
+      lastAutoSearchQuery = candidate;
+      await search({ urlOverride: candidate });
+    }, LIVE_SEARCH_DEBOUNCE_MS);
   });
 
   bpmSlider.addEventListener("input", () => {
@@ -576,6 +617,7 @@
     const url = urlInput.value.trim();
     const effectiveUrl = urlOverride || url;
     if (!effectiveUrl) return;
+    lastAutoSearchQuery = effectiveUrl;
     displayLimit = parseInt(document.getElementById("limit").value, 10);
 
     const request = beginRequest();
@@ -1017,6 +1059,7 @@
   async function queueTrack(track, btn = null) {
     if (!track) return;
     const provider = selectedQueueProvider;
+    console.log("[queueTrack] provider selected:", provider, "track:", trackKey(track));
 
     if (provider === SPOTIFY_PROVIDER) {
       if (!spotifyConnected) {
@@ -1028,6 +1071,7 @@
         return;
       }
       const uri = `spotify:track:${track.spotify_id}`;
+      console.log("[queueTrack] routing to Spotify queue", { uri });
       if (btn) {
         await queueSingleTrack(uri, btn);
         return;
@@ -1055,6 +1099,10 @@
       return;
     }
     QueueStore.enqueue(buildQueueItem(track));
+    console.log("[queueTrack] routing to external queue", {
+      selectedProvider: provider,
+      availableProviders: Object.keys(track.external_links || {}),
+    });
     externalQueueStatus.textContent = `Added ${track.name} to external queue (${provider}).`;
     renderExternalQueuePanel();
   }
@@ -1067,6 +1115,7 @@
     }
 
     if (isSpotifyProviderSelected()) {
+      console.log("[queueFilteredTracks] provider selected: spotify");
       if (!spotifyConnected) {
         actionStatus.textContent = "Connect Spotify to use Spotify queue.";
         return;
@@ -1100,6 +1149,7 @@
     }
 
     const queueable = ranked.filter((t) => t.external_links && Object.keys(t.external_links).length > 0);
+    console.log("[queueFilteredTracks] provider selected:", selectedQueueProvider, "queueable:", queueable.length);
     if (!queueable.length) {
       actionStatus.textContent = "No external-link tracks in current results.";
       return;
@@ -1182,6 +1232,11 @@
     const item = nextState.items[nextState.current_index];
     if (!item) return;
     const { provider, url } = chooseProviderUrl(item, selectedQueueProvider);
+    console.log("[openExternalQueueItem] provider resolution", {
+      selectedProvider: selectedQueueProvider,
+      resolvedProvider: provider,
+      queueId: queueId,
+    });
     if (!url) {
       externalQueueStatus.textContent = "No provider link available for this queue item.";
       return;
@@ -1555,6 +1610,27 @@
     QueueStore.clear();
     externalQueueStatus.textContent = "External queue cleared.";
     renderExternalQueuePanel();
+  });
+
+  exportQueueTextBtn.addEventListener("click", () => {
+    const state = QueueStore.getState();
+    const items = state.items || [];
+    if (!items.length) {
+      externalQueueStatus.textContent = "External queue is empty. Nothing to export.";
+      return;
+    }
+    const lines = items.map((item) => `${item.artist} — ${item.title}`);
+    const payload = `${lines.join("\n")}\n`;
+    const blob = new Blob([payload], { type: "text/plain;charset=utf-8" });
+    const downloadUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = downloadUrl;
+    anchor.download = "playlist-export.txt";
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(downloadUrl);
+    externalQueueStatus.textContent = `Exported ${items.length} track(s) as text file.`;
   });
 
   renderExternalQueuePanel();

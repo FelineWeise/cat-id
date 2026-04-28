@@ -27,7 +27,7 @@ TRACK_URI_PATTERN = re.compile(r"spotify:track:([a-zA-Z0-9]+)")
 TARGET_THRESHOLD = 0.3
 SPOTIFY_RATE_LIMIT_COOLDOWN_SECONDS = 180
 _spotify_mapping_throttled_until = {"app": 0.0, "user": 0.0}
-_spotify_feature_throttled_until = 0.0
+_spotify_feature_throttled_until = {"app": 0.0, "user": 0.0}
 MAPPING_RESULT_LIMIT = 5
 MAPPING_MIN_SCORE = 0.65
 MappingSource = Literal["app", "user"]
@@ -44,11 +44,13 @@ def _set_mapping_throttled(
     )
 
 
-def _set_feature_throttled(retry_after_seconds: int | None = None) -> None:
-    global _spotify_feature_throttled_until
+def _set_feature_throttled(
+    retry_after_seconds: int | None = None,
+    source: MappingSource = "app",
+) -> None:
     cooldown = retry_after_seconds or SPOTIFY_RATE_LIMIT_COOLDOWN_SECONDS
-    _spotify_feature_throttled_until = max(
-        _spotify_feature_throttled_until,
+    _spotify_feature_throttled_until[source] = max(
+        _spotify_feature_throttled_until[source],
         time.monotonic() + max(1, cooldown),
     )
 
@@ -57,8 +59,8 @@ def spotify_mapping_allowed(source: MappingSource = "app") -> bool:
     return time.monotonic() >= _spotify_mapping_throttled_until[source]
 
 
-def spotify_feature_calls_allowed() -> bool:
-    return time.monotonic() >= _spotify_feature_throttled_until
+def spotify_feature_calls_allowed(source: MappingSource = "app") -> bool:
+    return time.monotonic() >= _spotify_feature_throttled_until[source]
 
 
 def _handle_spotify_rate_limit(
@@ -76,7 +78,7 @@ def _handle_spotify_rate_limit(
     if target == "mapping":
         _set_mapping_throttled(retry_after, source=source)
     else:
-        _set_feature_throttled(retry_after)
+        _set_feature_throttled(retry_after, source=source)
     logger.warning(
         "Spotify API throttled for %s calls (source=%s); entering cooldown.",
         target,
@@ -137,9 +139,9 @@ def _track_to_info(t: dict) -> TrackInfo:
     )
 
 
-def get_track_info(url_or_uri: str) -> TrackInfo:
+def get_track_info(url_or_uri: str, sp: spotipy.Spotify | None = None) -> TrackInfo:
     """Fetch basic track metadata from Spotify."""
-    sp = get_spotify_client()
+    sp = sp or get_spotify_client()
     track_id = extract_track_id(url_or_uri)
     return _track_to_info(sp.track(track_id))
 
@@ -180,11 +182,9 @@ def resolve_spotify_track_with_source(
         if hinted is not None:
             return hinted, "spotify_id_hint"
 
-    app_track = _resolve_with_cached_app(artist_norm, track_norm, isrc_norm)
+    app_track, app_source = _resolve_with_cached_app(artist_norm, track_norm, isrc_norm)
     if app_track is not None:
-        if isrc_norm and _search_track_by_isrc_cached(isrc_norm) is not None:
-            return app_track, "app_isrc_search"
-        return app_track, "app_text_search"
+        return app_track, app_source
     return None, None
 
 
@@ -225,12 +225,15 @@ def _search_track_cached(artist: str, track_name: str) -> TrackInfo | None:
     )
 
 
-def _resolve_with_cached_app(artist: str, track_name: str, isrc: str) -> TrackInfo | None:
+def _resolve_with_cached_app(artist: str, track_name: str, isrc: str) -> tuple[TrackInfo | None, str | None]:
     if isrc:
         by_isrc = _search_track_by_isrc_cached(isrc)
         if by_isrc is not None:
-            return by_isrc
-    return _search_track_cached(artist, track_name)
+            return by_isrc, "app_isrc_search"
+    by_text = _search_track_cached(artist, track_name)
+    if by_text is not None:
+        return by_text, "app_text_search"
+    return None, None
 
 
 def _resolve_with_client(
@@ -431,14 +434,19 @@ def _parse_audio_features(raw: dict | None) -> AudioFeatures | None:
     )
 
 
-def get_audio_features(track_ids: list[str]) -> dict[str, AudioFeatures | None]:
+def get_audio_features(
+    track_ids: list[str],
+    sp: spotipy.Spotify | None = None,
+    *,
+    source: MappingSource = "app",
+) -> dict[str, AudioFeatures | None]:
     """Batch-fetch audio features. Returns {track_id: AudioFeatures | None}.
 
     Raises ValueError with a clear message if the endpoint returns 403,
     which typically means the Spotify app lacks extended quota access.
     """
-    sp = get_spotify_client()
-    if not spotify_feature_calls_allowed():
+    sp = sp or get_spotify_client()
+    if not spotify_feature_calls_allowed(source):
         return {track_id: None for track_id in track_ids}
     result: dict[str, AudioFeatures | None] = {}
     for i in range(0, len(track_ids), 100):
@@ -446,7 +454,7 @@ def get_audio_features(track_ids: list[str]) -> dict[str, AudioFeatures | None]:
         try:
             features_list = sp.audio_features(batch)
         except spotipy.SpotifyException as exc:
-            if _handle_spotify_rate_limit(exc, target="feature"):
+            if _handle_spotify_rate_limit(exc, target="feature", source=source):
                 for tid in batch:
                     result[tid] = None
                 continue
@@ -500,10 +508,13 @@ def get_recommendations(
     seed_track_id: str,
     targets: dict[str, float],
     limit: int = 20,
+    sp: spotipy.Spotify | None = None,
+    *,
+    source: MappingSource = "app",
 ) -> list[TrackInfo]:
     """Fetch Spotify recommendations seeded by a track with audio feature targets."""
-    sp = get_spotify_client()
-    if not spotify_feature_calls_allowed():
+    sp = sp or get_spotify_client()
+    if not spotify_feature_calls_allowed(source):
         return []
     try:
         resp = sp.recommendations(
@@ -512,7 +523,7 @@ def get_recommendations(
             **targets,
         )
     except spotipy.SpotifyException as exc:
-        if _handle_spotify_rate_limit(exc, target="feature"):
+        if _handle_spotify_rate_limit(exc, target="feature", source=source):
             return []
         if exc.http_status == 403:
             raise ValueError(
