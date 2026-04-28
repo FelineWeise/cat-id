@@ -1,8 +1,10 @@
 import asyncio
 import logging
+import re
 import secrets
 import time
 from collections.abc import Sequence
+from difflib import SequenceMatcher
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -31,7 +33,15 @@ from backend.config import (
     SPOTIFY_REDIRECT_URI,
 )
 from backend.lastfm import fetch_track_tags, get_similar_tracks, get_track_tags
-from backend.models import AudioSimilarRequest, SimilarTracksResponse, TrackInfo, TrackRequest
+from backend.models import (
+    AudioSimilarRequest,
+    SimilarTracksResponse,
+    TextPlaylistCreateRequest,
+    TextPlaylistCreateResponse,
+    TextPlaylistUnmatched,
+    TrackInfo,
+    TrackRequest,
+)
 from backend.link_aggregator import resolve_external_links
 from backend.spotify import (
     build_recommendation_targets,
@@ -86,10 +96,12 @@ EXTERNAL_LINKS_ENRICH_CAP = 20
 SPOTIFY_ENRICH_SEED_WEIGHT = 0.7
 TAG_ALIGNMENT_WEIGHT = 0.25
 DEEZER_SIGNAL_WEIGHT = 0.05
+SEED_PROFILE_SCORE_WEIGHT = 0.35
 
 logger = logging.getLogger(__name__)
 _shared_http_client: httpx.AsyncClient | None = None
 session_store = build_session_store(SESSION_STORE_BACKEND, REDIS_URL)
+_NON_ALNUM = re.compile(r"[^a-z0-9]+", re.I)
 
 
 def _listener_fetch_limit(limit: int, strict_mapped_only: bool) -> int:
@@ -115,11 +127,20 @@ def _build_similar_response(
     approximated: bool = False,
 ) -> SimilarTracksResponse:
     """Slice ranked results; when strict_mapped_only, drop tracks without Spotify IDs."""
-    total_candidates = len(similar_ranked)
+    seeded_ranked = sorted(
+        similar_ranked,
+        key=lambda track: (
+            (track.match_score or 0.0) + (_seed_profile_score(seed, track) * SEED_PROFILE_SCORE_WEIGHT),
+            _instrumental_bias_score(track),
+            1.0 if track.preview_url else 0.0,
+        ),
+        reverse=True,
+    )
+    total_candidates = len(seeded_ranked)
     if strict_mapped_only:
-        filtered = [t for t in similar_ranked if t.spotify_id][:limit]
+        filtered = [t for t in seeded_ranked if t.spotify_id][:limit]
     else:
-        filtered = similar_ranked[:limit]
+        filtered = seeded_ranked[:limit]
     mapped_count, unmapped_count = _mapping_summary(filtered)
     mapping_source_counts: dict[str, int] = {}
     mapping_used_user_token = False
@@ -145,6 +166,28 @@ def _build_similar_response(
         tag_categories=tag_categories,
         approximated=approximated,
     )
+
+
+def _normalized_text(value: str) -> str:
+    lowered = (value or "").strip().lower()
+    lowered = _NON_ALNUM.sub(" ", lowered)
+    return re.sub(r"\s+", " ", lowered).strip()
+
+
+def _seed_profile_score(seed: TrackInfo, track: TrackInfo) -> float:
+    tag_score = tag_alignment_score(seed.tags or [], track.tags or [])
+    bpm_score = 0.0
+    if seed.bpm and track.bpm and seed.bpm > 0:
+        bpm_diff_ratio = min(1.0, abs(seed.bpm - track.bpm) / seed.bpm)
+        bpm_score = 1.0 - bpm_diff_ratio
+    title_seed = _normalized_text(seed.name)
+    title_track = _normalized_text(track.name)
+    title_score = (
+        SequenceMatcher(None, title_seed, title_track).ratio()
+        if title_seed and title_track
+        else 0.0
+    )
+    return (tag_score * 0.5) + (bpm_score * 0.35) + (title_score * 0.15)
 
 
 def _get_http_client() -> httpx.AsyncClient:
@@ -931,6 +974,20 @@ def _queue_status_for_errors(errors: Sequence[dict[str, str | bool]]) -> int:
     return 502
 
 
+def _parse_text_playlist_line(line: str) -> tuple[str | None, str | None]:
+    raw = (line or "").strip()
+    if not raw:
+        return None, None
+    for sep in (" — ", " - ", " – ", "—", "-", "–"):
+        if sep in raw:
+            left, right = raw.split(sep, 1)
+            artist = left.strip()
+            title = right.strip()
+            if artist and title:
+                return artist, title
+    return None, None
+
+
 @app.post("/api/spotify/queue")
 def add_to_queue(req: QueueRequest, request: Request):
     """Add tracks to the user's Spotify playback queue."""
@@ -986,6 +1043,63 @@ def add_to_queue(req: QueueRequest, request: Request):
         else f"Added {added} track(s), failed {len(errors)}."
     )
     return {"added": added, "failed": len(errors), "errors": errors, "message": message}
+
+
+@app.post("/api/spotify/playlist/from-text", response_model=TextPlaylistCreateResponse)
+def create_playlist_from_text(req: TextPlaylistCreateRequest, request: Request):
+    sp = _get_user_sp(request)
+    cleaned_lines = [line.strip() for line in req.lines if line and line.strip()]
+    playlist_name = req.name.strip() or "Cat-ID Text Playlist"
+    uris: list[str] = []
+    unmatched: list[TextPlaylistUnmatched] = []
+
+    for line in cleaned_lines:
+        artist, title = _parse_text_playlist_line(line)
+        if not artist or not title:
+            unmatched.append(TextPlaylistUnmatched(line=line, reason="Could not parse line format"))
+            continue
+        try:
+            response = sp.search(
+                q=f"artist:{artist} track:{title}",
+                type="track",
+                limit=1,
+                market="from_token",
+            )
+            items = response.get("tracks", {}).get("items", [])
+        except Exception:
+            items = []
+
+        if not items:
+            unmatched.append(TextPlaylistUnmatched(line=line, reason="No Spotify match found"))
+            continue
+        track_id = items[0].get("id")
+        if not track_id:
+            unmatched.append(TextPlaylistUnmatched(line=line, reason="Match missing Spotify ID"))
+            continue
+        uris.append(f"spotify:track:{track_id}")
+
+    if not uris:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "NO_MATCHED_TRACKS",
+                "message": "No text lines could be mapped to Spotify tracks.",
+                "unmatched": [item.model_dump() for item in unmatched],
+            },
+        )
+
+    user_id = sp.current_user()["id"]
+    playlist = sp.user_playlist_create(user_id, playlist_name, public=False)
+    for i in range(0, len(uris), 100):
+        sp.playlist_add_items(playlist["id"], uris[i : i + 100])
+
+    return TextPlaylistCreateResponse(
+        playlist_id=playlist["id"],
+        playlist_url=playlist["external_urls"]["spotify"],
+        input_count=len(cleaned_lines),
+        matched_count=len(uris),
+        unmatched=unmatched,
+    )
 
 
 app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")

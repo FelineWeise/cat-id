@@ -13,8 +13,7 @@ A web app that finds songs similar to a given Spotify track using two discovery 
 - **Spotify integration** — album art, direct links, playlist creation, and queue control (requires OAuth)
 - **Provider-routed queue** — select queue provider in-app:
   - `Spotify` (when connected) routes queue actions to your Spotify account queue
-  - external providers route actions to local external queue + provider links (Song.link/Odesli)
-- **Queue export actions** — export local external queue as `playlist-export.txt` and open Spotlistr text importer
+- **Text playlist builder** — add visible/individual results to a text list, export `playlist-export.txt`, and create a Spotify playlist directly from that text list in-app
 - Configurable result count (5 / 10 / 20 / 50)
 
 ### Listener vs Audio Similarity
@@ -24,7 +23,7 @@ A web app that finds songs similar to a given Spotify track using two discovery 
 - If Spotify audio-features access is unavailable, audio mode uses tag-based approximation and marks responses as approximated.
 - **Optional strict Spotify-only results:** set `strict_mapped_only` to `true` on `/api/similar` and `/api/similar/audio` to return only tracks with a `spotify_id` (every listed row is queue/playlist-safe). Default is `false` so you still see Last.fm-style matches even when Spotify mapping fails for some rows; queue/playlist actions only use mapped URIs.
 - Optional **MusicBrainz** hints (`use_metadata_fallback`, default `true`) retry Spotify resolution when Deezer/Spotify text matching fails, including URL relation extraction for direct Spotify track IDs when available.
-- If the user is connected to Spotify, mapping/search calls use the user token path; anonymous users use app-token mapping.
+- If the user is connected to Spotify, mapping/search/queue calls use the user token path; anonymous users use app-token mapping.
 
 ## Prerequisites
 
@@ -96,10 +95,18 @@ Useful local overrides:
 - If no active device is found, the backend attempts one automatic transfer to an available device, then retries queueing.
 - If no devices are available at all, open Spotify on desktop/mobile/web player first, then try queueing again.
 - Track links attempt to open the Spotify desktop/app first (`spotify:` deep link) and fall back to web player if the OS/browser does not hand off to the app.
-- Queue behavior is provider-routed from the queue area:
-  - If provider is Spotify and you're connected, both single-track and bulk `Add to Queue` use `/api/spotify/queue`.
-  - If provider is external, queue actions add tracks to local browser queue and open provider links.
-  - External provider resolution uses selected provider first, then track primary provider, then fallback priority: `soundcloud > youtube_music > youtube > deezer`.
+- Queue behavior:
+  - Spotify queue is the only queue-capable path in-app.
+  - Single-track and bulk `Add to Queue` use `/api/spotify/queue` with the connected user session.
+  - Deezer and other external providers remain link/open sources, not queue targets.
+
+### Text playlist builder behavior
+
+- Add individual result rows to text list with `+TXT`.
+- Add current visible results in one action from the text panel.
+- Export current text lines to `playlist-export.txt`.
+- Create Spotify playlist from text lines directly in-app via `/api/spotify/playlist/from-text`.
+- Text line format: `Artist — Track` (one per line). Unmatched lines are reported back in the response summary.
 
 ## Rate limits and auth notes
 

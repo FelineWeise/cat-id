@@ -124,6 +124,20 @@
       <span id="action-status" class="action-status" aria-live="polite"></span>
     </div>
 
+    <section id="text-playlist-panel" class="external-queue-panel hidden" aria-live="polite">
+      <div class="external-queue-head">
+        <h3>Text Playlist Builder</h3>
+      </div>
+      <div class="external-queue-actions">
+        <button id="text-add-visible-btn" class="action-btn" type="button">Add Visible</button>
+        <button id="text-export-btn" class="action-btn" type="button">Export as Text</button>
+        <button id="text-create-spotify-btn" class="action-btn" type="button">Create Spotify Playlist</button>
+      </div>
+      <input id="text-playlist-name" type="text" placeholder="Playlist name" value="Cat-ID Text Playlist" />
+      <textarea id="text-playlist-lines" rows="8" placeholder="Artist — Track (one per line)"></textarea>
+      <div id="text-playlist-status" class="action-status"></div>
+    </section>
+
     <section id="external-queue-panel" class="external-queue-panel hidden" aria-live="polite">
       <div class="external-queue-head">
         <h3>Queue Provider</h3>

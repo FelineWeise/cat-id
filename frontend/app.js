@@ -31,6 +31,13 @@
   const spotifyUserEl = document.getElementById("spotify-user");
   const spotifyLogoutBtn = document.getElementById("spotify-logout-btn");
   const reloadBtn = document.getElementById("reload-btn");
+  const textPlaylistPanel = document.getElementById("text-playlist-panel");
+  const textAddVisibleBtn = document.getElementById("text-add-visible-btn");
+  const textExportBtn = document.getElementById("text-export-btn");
+  const textCreateSpotifyBtn = document.getElementById("text-create-spotify-btn");
+  const textPlaylistNameInput = document.getElementById("text-playlist-name");
+  const textPlaylistLines = document.getElementById("text-playlist-lines");
+  const textPlaylistStatus = document.getElementById("text-playlist-status");
   const audioWeightsPanel = document.getElementById("audio-weights");
   const weightRows = audioWeightsPanel.querySelectorAll(".weight-row");
   const modeBtns = document.querySelectorAll(".mode-btn");
@@ -75,6 +82,7 @@
 
   const EXTERNAL_QUEUE_KEY = "catid_external_queue_v1";
   const EXTERNAL_PROVIDER_KEY = "catid_external_provider_pref";
+  const TEXT_PLAYLIST_LINES_KEY = "catid_text_playlist_lines_v1";
   const EXTERNAL_AUTO_ADVANCE_MS = 10000;
   const LIVE_SEARCH_DEBOUNCE_MS = 400;
   const SPOTIFY_PROVIDER = "spotify";
@@ -128,6 +136,29 @@
     }
   }
 
+  function getTextLines() {
+    const value = window.localStorage.getItem(TEXT_PLAYLIST_LINES_KEY) || "";
+    return value
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
+  function setTextLines(lines) {
+    const normalized = [...new Set(lines.map((line) => line.trim()).filter(Boolean))];
+    textPlaylistLines.value = normalized.join("\n");
+    window.localStorage.setItem(TEXT_PLAYLIST_LINES_KEY, textPlaylistLines.value);
+  }
+
+  function appendTrackToTextList(track) {
+    const artist = (track.artists || []).join(", ").trim();
+    const title = (track.name || "").trim();
+    if (!artist || !title) return;
+    const next = getTextLines();
+    next.push(`${artist} — ${title}`);
+    setTextLines(next);
+  }
+
   function buildQueueItem(track) {
     return {
       id: `${trackKey(track)}::${Date.now()}::${Math.random().toString(36).slice(2, 8)}`,
@@ -165,24 +196,14 @@
   }
 
   function syncProviderOptions() {
-    const previous = externalProviderPref.value || selectedQueueProvider || QueueStore.loadPreference();
-    const options = [
-      ["youtube_music", "YouTube Music"],
-      ["youtube", "YouTube"],
-      ["deezer", "Deezer"],
-      ["apple_music", "Apple Music"],
-      ["soundcloud", "SoundCloud"],
-      ["tidal", "Tidal"],
-    ];
-    if (spotifyConnected) {
-      options.unshift([SPOTIFY_PROVIDER, "Spotify"]);
-    }
+    const previous = externalProviderPref.value || selectedQueueProvider || SPOTIFY_PROVIDER;
+    const options = [[SPOTIFY_PROVIDER, "Spotify"]];
     externalProviderPref.innerHTML = options
       .map(([value, label]) => `<option value="${value}">${label}</option>`)
       .join("");
 
     const allowed = new Set(options.map(([value]) => value));
-    const fallback = spotifyConnected ? SPOTIFY_PROVIDER : QueueStore.loadPreference();
+    const fallback = SPOTIFY_PROVIDER;
     const next = allowed.has(previous) ? previous : (allowed.has(fallback) ? fallback : options[0][0]);
     externalProviderPref.value = next;
     selectedQueueProvider = next;
@@ -1058,53 +1079,35 @@
 
   async function queueTrack(track, btn = null) {
     if (!track) return;
-    const provider = selectedQueueProvider;
-    console.log("[queueTrack] provider selected:", provider, "track:", trackKey(track));
-
-    if (provider === SPOTIFY_PROVIDER) {
-      if (!spotifyConnected) {
-        actionStatus.textContent = "Connect Spotify to use Spotify queue.";
-        return;
-      }
-      if (!track.spotify_id) {
-        actionStatus.textContent = "This track has no Spotify match; choose an external provider.";
-        return;
-      }
-      const uri = `spotify:track:${track.spotify_id}`;
-      console.log("[queueTrack] routing to Spotify queue", { uri });
-      if (btn) {
-        await queueSingleTrack(uri, btn);
-        return;
-      }
-      try {
-        const resp = await fetch("/api/spotify/queue", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ track_uris: [uri] }),
-        });
-        if (!resp.ok) {
-          const data = await parseErrorPayload(resp);
-          throw new Error(queueErrorText(data, resp.status));
-        }
-        const data = await resp.json();
-        actionStatus.textContent = queueSummaryText(data);
-      } catch (err) {
-        actionStatus.textContent = err.message || "Could not add to Spotify queue.";
-      }
+    if (!spotifyConnected) {
+      actionStatus.textContent = "Connect Spotify to use Spotify queue.";
       return;
     }
-
-    if (!track.external_links || Object.keys(track.external_links).length === 0) {
-      actionStatus.textContent = "No external links available for this track.";
+    if (!track.spotify_id) {
+      actionStatus.textContent = "This track has no Spotify match.";
       return;
     }
-    QueueStore.enqueue(buildQueueItem(track));
-    console.log("[queueTrack] routing to external queue", {
-      selectedProvider: provider,
-      availableProviders: Object.keys(track.external_links || {}),
-    });
-    externalQueueStatus.textContent = `Added ${track.name} to external queue (${provider}).`;
-    renderExternalQueuePanel();
+    const uri = `spotify:track:${track.spotify_id}`;
+    console.log("[queueTrack] routing to Spotify queue", { uri });
+    if (btn) {
+      await queueSingleTrack(uri, btn);
+      return;
+    }
+    try {
+      const resp = await fetch("/api/spotify/queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ track_uris: [uri] }),
+      });
+      if (!resp.ok) {
+        const data = await parseErrorPayload(resp);
+        throw new Error(queueErrorText(data, resp.status));
+      }
+      const data = await resp.json();
+      actionStatus.textContent = queueSummaryText(data);
+    } catch (err) {
+      actionStatus.textContent = err.message || "Could not add to Spotify queue.";
+    }
   }
 
   async function queueFilteredTracks() {
@@ -1114,149 +1117,46 @@
       return;
     }
 
-    if (isSpotifyProviderSelected()) {
-      console.log("[queueFilteredTracks] provider selected: spotify");
-      if (!spotifyConnected) {
-        actionStatus.textContent = "Connect Spotify to use Spotify queue.";
-        return;
-      }
-      const mappable = ranked.filter((t) => t.spotify_id);
-      const uris = mappable.map((t) => `spotify:track:${t.spotify_id}`);
-      if (!uris.length) {
-        actionStatus.textContent = "No Spotify tracks in current results. Choose an external provider.";
-        return;
-      }
-      actionStatus.textContent = `Adding to Spotify queue (${mappable.length} mappable, ${ranked.length - mappable.length} skipped)...`;
-      addQueueBtn.disabled = true;
-      try {
-        const resp = await fetch("/api/spotify/queue", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ track_uris: uris }),
-        });
-        if (!resp.ok) {
-          const data = await parseErrorPayload(resp);
-          throw new Error(queueErrorText(data, resp.status));
-        }
-        const data = await resp.json();
-        actionStatus.textContent = queueSummaryText(data);
-      } catch (err) {
-        actionStatus.textContent = err.message;
-      } finally {
-        addQueueBtn.disabled = false;
-      }
+    if (!spotifyConnected) {
+      actionStatus.textContent = "Connect Spotify to use Spotify queue.";
       return;
     }
-
-    const queueable = ranked.filter((t) => t.external_links && Object.keys(t.external_links).length > 0);
-    console.log("[queueFilteredTracks] provider selected:", selectedQueueProvider, "queueable:", queueable.length);
-    if (!queueable.length) {
-      actionStatus.textContent = "No external-link tracks in current results.";
+    const mappable = ranked.filter((t) => t.spotify_id);
+    const uris = mappable.map((t) => `spotify:track:${t.spotify_id}`);
+    if (!uris.length) {
+      actionStatus.textContent = "No Spotify tracks in current results.";
       return;
     }
-    queueable.forEach((track) => QueueStore.enqueue(buildQueueItem(track)));
-    externalQueueStatus.textContent = `Added ${queueable.length} track(s) to external queue (${selectedQueueProvider}).`;
-    actionStatus.textContent = `Queued ${queueable.length} track(s) for external playback (${selectedQueueProvider}).`;
-    renderExternalQueuePanel();
+    actionStatus.textContent = `Adding to Spotify queue (${mappable.length} mappable, ${ranked.length - mappable.length} skipped)...`;
+    addQueueBtn.disabled = true;
+    try {
+      const resp = await fetch("/api/spotify/queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ track_uris: uris }),
+      });
+      if (!resp.ok) {
+        const data = await parseErrorPayload(resp);
+        throw new Error(queueErrorText(data, resp.status));
+      }
+      const data = await resp.json();
+      actionStatus.textContent = queueSummaryText(data);
+    } catch (err) {
+      actionStatus.textContent = err.message;
+    } finally {
+      addQueueBtn.disabled = false;
+    }
   }
 
   function renderExternalQueuePanel() {
-    if (isSpotifyProviderSelected()) {
-      externalQueuePanel.classList.add("hidden");
-      return;
-    }
-    const state = QueueStore.getState();
-    const items = state.items || [];
-    const hasAnyExternalLinks = allTracks.some((t) => t.external_links && Object.keys(t.external_links).length > 0);
-    if (!items.length && !hasAnyExternalLinks) {
-      externalQueuePanel.classList.add("hidden");
-      return;
-    }
-    externalQueuePanel.classList.remove("hidden");
-
-    const current = items[state.current_index] || null;
-    externalOpenCurrentBtn.disabled = !current;
-    externalMarkPlayedBtn.disabled = !current;
-    externalNextBtn.disabled = items.length <= 1 || state.current_index >= items.length - 1;
-    externalPrevBtn.disabled = items.length <= 1 || state.current_index <= 0;
-    externalClearBtn.disabled = items.length === 0;
-
-    if (!items.length) {
-      externalQueueList.innerHTML = "<p class=\"detail\">External queue is empty.</p>";
-      if (!externalQueueStatus.textContent) {
-        externalQueueStatus.textContent = "Add tracks with external links to build your queue.";
-      }
-      return;
-    }
-
-    externalQueueList.innerHTML = items
-      .map((item, idx) => {
-        const activeClass = idx === state.current_index ? " external-queue-item-active" : "";
-        const { provider } = chooseProviderUrl(item, selectedQueueProvider);
-        return `
-          <div class="external-queue-item${activeClass}" data-queue-id="${item.id}" data-queue-idx="${idx}">
-            ${item.album_art ? `<img src="${item.album_art}" alt="" />` : '<div class="img-placeholder"></div>'}
-            <div class="external-queue-item-main">
-              <div class="name">${esc(item.title)}</div>
-              <div class="detail">${esc(item.artist)}</div>
-              <div class="detail">Provider: ${esc(provider || "none")}</div>
-            </div>
-            <div class="track-actions">
-              <button class="action-btn external-open-item-btn" data-queue-id="${item.id}" type="button">Open</button>
-              <button class="action-btn external-remove-item-btn" data-queue-id="${item.id}" type="button">Remove</button>
-            </div>
-          </div>
-        `;
-      })
-      .join("");
-
-    externalQueueList.querySelectorAll(".external-open-item-btn").forEach((btn) => {
-      btn.addEventListener("click", () => openExternalQueueItem(btn.dataset.queueId, true));
-    });
-    externalQueueList.querySelectorAll(".external-remove-item-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        QueueStore.remove(btn.dataset.queueId);
-        renderExternalQueuePanel();
-      });
-    });
+    externalQueuePanel.classList.add("hidden");
   }
 
   function openExternalQueueItem(queueId, updateCurrent) {
-    const state = QueueStore.getState();
-    const idx = state.items.findIndex((item) => item.id === queueId);
-    if (idx < 0) return;
-    if (updateCurrent) {
-      QueueStore.setCurrent(idx);
-    }
-    const nextState = QueueStore.getState();
-    const item = nextState.items[nextState.current_index];
-    if (!item) return;
-    const { provider, url } = chooseProviderUrl(item, selectedQueueProvider);
-    console.log("[openExternalQueueItem] provider resolution", {
-      selectedProvider: selectedQueueProvider,
-      resolvedProvider: provider,
-      queueId: queueId,
+    console.log("[openExternalQueueItem] disabled for spotify-only queue", {
+      queueId,
+      updateCurrent,
     });
-    if (!url) {
-      externalQueueStatus.textContent = "No provider link available for this queue item.";
-      return;
-    }
-    const opened = window.open(url, "_blank", "noopener");
-    if (!opened) {
-      externalQueueStatus.textContent = "Popup blocked. Allow popups and try again.";
-      return;
-    }
-    item.last_opened_provider = provider;
-    QueueStore.saveState(nextState);
-    externalQueueStatus.textContent = `Opened ${item.title} on ${provider || "external provider"}.`;
-    if (externalQueueAutoAdvanceTimer) {
-      window.clearTimeout(externalQueueAutoAdvanceTimer);
-    }
-    externalQueueAutoAdvanceTimer = window.setTimeout(() => {
-      QueueStore.advance();
-      renderExternalQueuePanel();
-    }, EXTERNAL_AUTO_ADVANCE_MS);
-    renderExternalQueuePanel();
   }
 
   // --- Rendering ---
@@ -1319,17 +1219,12 @@
           ? `<div class="track-card-tags">${audioFeatureBadges(t.audio_features)}</div>`
           : "";
       const queueBtn =
-        (t.spotify_id || (t.external_links && Object.keys(t.external_links).length > 0))
-          ? `<button class="queue-btn provider-queue-btn" data-track-idx="${idx}" title="Add to selected queue provider" aria-label="Queue ${esc(t.name)}">+Q</button>`
+        t.spotify_id
+          ? `<button class="queue-btn provider-queue-btn" data-track-idx="${idx}" title="Add to Spotify queue" aria-label="Queue ${esc(t.name)}">+Q</button>`
           : "";
-      const externalLinks = t.external_links || {};
-      const hasExternalLinks = Object.keys(externalLinks).length > 0;
-      const externalPlayBtn =
-        hasExternalLinks
-          ? `<button class="queue-btn external-play-btn" data-track-idx="${idx}" title="Play on external provider">Play</button>`
-          : "";
+      const textBtn = `<button class="queue-btn text-list-btn" data-track-idx="${idx}" title="Add to text playlist list">+TXT</button>`;
       const mappingNote = !t.spotify_id
-        ? `<div class="detail">No Spotify match found.${hasExternalLinks ? " Use external queue provider." : ""}</div>`
+        ? `<div class="detail">No Spotify match found.</div>`
         : "";
       const drillBtn =
         t.spotify_url
@@ -1352,7 +1247,7 @@
           <div class="track-actions">
             ${previewBtn}
             ${queueBtn}
-            ${externalPlayBtn}
+            ${textBtn}
             ${drillBtn}
             ${spotifyBtn(t.spotify_url, t.spotify_id)}
           </div>
@@ -1371,24 +1266,13 @@
         await queueTrack(track, btn);
       });
     });
-    resultsEl.querySelectorAll(".external-play-btn").forEach((btn) => {
+    resultsEl.querySelectorAll(".text-list-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         const idx = parseInt(btn.dataset.trackIdx, 10);
         const track = visibleTracks[idx];
         if (!track) return;
-        const tmpItem = buildQueueItem(track);
-        const { provider, url } = chooseProviderUrl(
-          { links: tmpItem.links, primary_provider: tmpItem.primary_provider },
-          selectedQueueProvider,
-        );
-        if (!url) {
-          actionStatus.textContent = "No external provider link available for this track.";
-          return;
-        }
-        const opened = window.open(url, "_blank", "noopener");
-        actionStatus.textContent = opened
-          ? `Opened on ${provider || "external provider"}.`
-          : "Popup blocked. Allow popups to open external provider.";
+        appendTrackToTextList(track);
+        textPlaylistStatus.textContent = `Added "${track.name}" to text list.`;
       });
     });
     resultsEl.querySelectorAll(".drill-btn").forEach((btn) => {
@@ -1472,6 +1356,7 @@
   function updateActionsBar() {
     if (allTracks.length > 0) {
       actionsBar.classList.remove("hidden");
+      textPlaylistPanel.classList.remove("hidden");
       savePlaylistBtn.disabled = isRequestInFlight || !spotifyConnected;
       addQueueBtn.disabled = isRequestInFlight;
       const degradeNote = mappingDegradedReason ? ` (${mappingDegradedReason.replaceAll("_", " ")})` : "";
@@ -1485,14 +1370,15 @@
             ? " App-token mapping path active."
             : "";
       if (!spotifyConnected) {
-        actionStatus.textContent = `Queue provider: ${selectedQueueProvider}. Connect Spotify for Spotify playlist/queue actions.`;
+        actionStatus.textContent = "Connect Spotify for queue and playlist actions.";
       } else if (strictMappedOnly) {
-        actionStatus.textContent = `${mappedCount} Spotify-ready track(s) (strict)${degradeNote}.${sourceNote}${externalDegradeNote} Queue provider: ${selectedQueueProvider}.`;
+        actionStatus.textContent = `${mappedCount} Spotify-ready track(s) (strict)${degradeNote}.${sourceNote}${externalDegradeNote}`;
       } else {
-        actionStatus.textContent = `${mappedCount}/${mappedCount + unmappedCount} tracks mapped to Spotify${degradeNote}.${sourceNote}${externalDegradeNote} Queue provider: ${selectedQueueProvider}.`;
+        actionStatus.textContent = `${mappedCount}/${mappedCount + unmappedCount} tracks mapped to Spotify${degradeNote}.${sourceNote}${externalDegradeNote}`;
       }
     } else {
       actionsBar.classList.add("hidden");
+      textPlaylistPanel.classList.add("hidden");
     }
   }
 
@@ -1571,55 +1457,37 @@
   externalProviderPref.addEventListener("change", () => {
     QueueStore.savePreference(externalProviderPref.value);
     selectedQueueProvider = externalProviderPref.value;
-    if (selectedQueueProvider === SPOTIFY_PROVIDER) {
-      actionStatus.textContent = "Queue provider set to Spotify.";
-    } else {
-      actionStatus.textContent = `Queue provider set to ${selectedQueueProvider.replaceAll("_", " ")}.`;
-    }
+    actionStatus.textContent = "Queue provider set to Spotify.";
     updateActionsBar();
     renderExternalQueuePanel();
   });
 
-  externalOpenCurrentBtn.addEventListener("click", () => {
-    const state = QueueStore.getState();
-    const current = state.items[state.current_index];
-    if (!current) {
-      externalQueueStatus.textContent = "External queue is empty.";
+  textPlaylistLines.value = window.localStorage.getItem(TEXT_PLAYLIST_LINES_KEY) || "";
+  textPlaylistLines.addEventListener("input", () => {
+    window.localStorage.setItem(TEXT_PLAYLIST_LINES_KEY, textPlaylistLines.value);
+  });
+
+  textAddVisibleBtn.addEventListener("click", () => {
+    if (!visibleTracks.length) {
+      textPlaylistStatus.textContent = "No visible tracks to add.";
       return;
     }
-    openExternalQueueItem(current.id, true);
+    const next = getTextLines();
+    visibleTracks.forEach((track) => {
+      const artist = (track.artists || []).join(", ").trim();
+      const title = (track.name || "").trim();
+      if (artist && title) next.push(`${artist} — ${title}`);
+    });
+    setTextLines(next);
+    textPlaylistStatus.textContent = `Added ${visibleTracks.length} visible track(s) to text list.`;
   });
 
-  externalMarkPlayedBtn.addEventListener("click", () => {
-    QueueStore.advance();
-    externalQueueStatus.textContent = "Marked as played and advanced.";
-    renderExternalQueuePanel();
-  });
-
-  externalNextBtn.addEventListener("click", () => {
-    QueueStore.advance();
-    renderExternalQueuePanel();
-  });
-
-  externalPrevBtn.addEventListener("click", () => {
-    QueueStore.retreat();
-    renderExternalQueuePanel();
-  });
-
-  externalClearBtn.addEventListener("click", () => {
-    QueueStore.clear();
-    externalQueueStatus.textContent = "External queue cleared.";
-    renderExternalQueuePanel();
-  });
-
-  exportQueueTextBtn.addEventListener("click", () => {
-    const state = QueueStore.getState();
-    const items = state.items || [];
-    if (!items.length) {
-      externalQueueStatus.textContent = "External queue is empty. Nothing to export.";
+  textExportBtn.addEventListener("click", () => {
+    const lines = getTextLines();
+    if (!lines.length) {
+      textPlaylistStatus.textContent = "Text list is empty. Nothing to export.";
       return;
     }
-    const lines = items.map((item) => `${item.artist} — ${item.title}`);
     const payload = `${lines.join("\n")}\n`;
     const blob = new Blob([payload], { type: "text/plain;charset=utf-8" });
     const downloadUrl = URL.createObjectURL(blob);
@@ -1630,7 +1498,42 @@
     anchor.click();
     document.body.removeChild(anchor);
     URL.revokeObjectURL(downloadUrl);
-    externalQueueStatus.textContent = `Exported ${items.length} track(s) as text file.`;
+    textPlaylistStatus.textContent = `Exported ${lines.length} line(s) as text file.`;
+  });
+
+  textCreateSpotifyBtn.addEventListener("click", async () => {
+    const lines = getTextLines();
+    if (!lines.length) {
+      textPlaylistStatus.textContent = "Text list is empty.";
+      return;
+    }
+    if (!spotifyConnected) {
+      textPlaylistStatus.textContent = "Connect Spotify first.";
+      return;
+    }
+    textCreateSpotifyBtn.disabled = true;
+    textPlaylistStatus.textContent = "Creating Spotify playlist from text...";
+    try {
+      const resp = await fetch("/api/spotify/playlist/from-text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: (textPlaylistNameInput.value || "").trim() || "Cat-ID Text Playlist",
+          lines,
+        }),
+      });
+      const data = await parseErrorPayload(resp);
+      if (!resp.ok) {
+        const unmatched = Array.isArray(data?.unmatched) ? data.unmatched.length : 0;
+        throw new Error(`${data?.message || data?.detail || "Could not create playlist."} (${unmatched} unmatched)`);
+      }
+      const unmatchedCount = Array.isArray(data.unmatched) ? data.unmatched.length : 0;
+      textPlaylistStatus.innerHTML = `Playlist created (<a href="${data.playlist_url}" target="_blank" rel="noopener">open</a>). Matched ${data.matched_count}/${data.input_count}, unmatched ${unmatchedCount}.`;
+    } catch (err) {
+      textPlaylistStatus.textContent = err.message || "Could not create playlist from text.";
+    } finally {
+      textCreateSpotifyBtn.disabled = false;
+    }
   });
 
   renderExternalQueuePanel();

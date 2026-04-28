@@ -116,3 +116,21 @@ class SimilarTracksResponse(BaseModel):
         default=False,
         description="True when audio features were estimated from tags instead of Spotify's API",
     )
+
+
+class TextPlaylistCreateRequest(BaseModel):
+    name: str = Field(default="Cat-ID Text Playlist", min_length=1, max_length=200)
+    lines: list[str] = Field(default_factory=list, description="Lines in format 'Artist — Track'")
+
+
+class TextPlaylistUnmatched(BaseModel):
+    line: str
+    reason: str
+
+
+class TextPlaylistCreateResponse(BaseModel):
+    playlist_id: str
+    playlist_url: str
+    input_count: int
+    matched_count: int
+    unmatched: list[TextPlaylistUnmatched] = Field(default_factory=list)

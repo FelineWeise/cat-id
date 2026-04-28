@@ -911,6 +911,17 @@ header h1 {
   margin-top: 0.5rem;
 }
 
+#text-playlist-name,
+#text-playlist-lines {
+  width: 100%;
+  border: 1px solid var(--surface2);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0.5rem 0.6rem;
+  margin-top: 0.45rem;
+}
+
 .external-queue-item {
   display: flex;
   align-items: center;
