@@ -151,6 +151,7 @@ def resolve_spotify_track_with_source(
     *,
     user_sp: spotipy.Spotify | None = None,
     spotify_id_hint: str | None = None,
+    allow_app_fallback: bool = True,
 ) -> tuple[TrackInfo | None, str | None]:
     """Resolve a catalog track to Spotify and report source."""
     artist_norm = artist.strip().lower()
@@ -170,6 +171,9 @@ def resolve_spotify_track_with_source(
         )
         if track is not None:
             return track, "user_token_search"
+
+    if not allow_app_fallback:
+        return None, None
 
     if hint_id:
         hinted = _fetch_track_by_id_cached(hint_id)

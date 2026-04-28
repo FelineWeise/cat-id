@@ -262,13 +262,15 @@ async def _enrich_lastfm(
             try:
                 dz_info = await deezer_fetch(client, artist_name, track_name)
                 candidate_isrc = dz_info.get("isrc") if isinstance(dz_info, dict) else None
+                mapping_source_allowed = (
+                    spotify_mapping_allowed("user")
+                    if user_sp is not None
+                    else spotify_mapping_allowed("app")
+                )
                 mapping_allowed = (
                     mapping_calls < SPOTIFY_RESOLVE_BUDGET
                     and time.monotonic() < enrich_deadline
-                    and (
-                        spotify_mapping_allowed("app")
-                        or (user_sp is not None and spotify_mapping_allowed("user"))
-                    )
+                    and mapping_source_allowed
                 )
                 sp_track = None
                 mapping_source: str | None = None
@@ -280,11 +282,12 @@ async def _enrich_lastfm(
                         track_name,
                         candidate_isrc,
                         user_sp=user_sp,
+                        allow_app_fallback=user_sp is None,
                     )
                 else:
                     if mapping_calls >= SPOTIFY_RESOLVE_BUDGET:
                         mapping_degraded_reason = "mapping_limit_reached"
-                    elif not spotify_mapping_allowed("app") and not spotify_mapping_allowed("user"):
+                    elif not mapping_source_allowed:
                         mapping_degraded_reason = "spotify_mapping_rate_limited"
                     elif time.monotonic() >= enrich_deadline:
                         mapping_degraded_reason = "enrich_time_budget_exceeded"
@@ -317,10 +320,7 @@ async def _enrich_lastfm(
                     and use_metadata_fallback
                     and mb_fallback_used < MB_FALLBACK_CAP
                     and time.monotonic() < enrich_deadline
-                    and (
-                        spotify_mapping_allowed("app")
-                        or (user_sp is not None and spotify_mapping_allowed("user"))
-                    )
+                    and mapping_source_allowed
                 ):
                     hints = await fetch_musicbrainz_hints(
                         client, artist_name, track_name, candidate_isrc,
@@ -346,6 +346,7 @@ async def _enrich_lastfm(
                             hint_title or track_name,
                             hint_isrc or candidate_isrc,
                             user_sp=user_sp,
+                            allow_app_fallback=user_sp is None,
                         )
 
                 tags: list[str] = []
