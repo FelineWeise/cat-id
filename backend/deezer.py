@@ -7,14 +7,14 @@ from backend.http_policy import aget_json_with_policy
 DEEZER_SEARCH = "https://api.deezer.com/search"
 DEEZER_TRACK = "https://api.deezer.com/track"
 _sem = asyncio.Semaphore(8)
-_EMPTY = {"preview": None, "bpm": None, "isrc": None}
+_EMPTY = {"preview": None, "bpm": None, "isrc": None, "link": None}
 logger = logging.getLogger(__name__)
 
 
 async def fetch_track_info(client: httpx.AsyncClient, artist: str, track_name: str) -> dict:
     """Search Deezer for a track and return preview URL + BPM.
 
-    Returns dict with keys: preview (str|None), bpm (float|None), isrc (str|None).
+    Returns dict with keys: preview (str|None), bpm (float|None), isrc (str|None), link (str|None).
     """
     async with _sem:
         try:
@@ -31,6 +31,7 @@ async def fetch_track_info(client: httpx.AsyncClient, artist: str, track_name: s
                 return _EMPTY
 
             preview = items[0].get("preview") or None
+            deezer_link = items[0].get("link") or None
             track_id = items[0].get("id")
             bpm = None
             isrc = None
@@ -50,7 +51,7 @@ async def fetch_track_info(client: httpx.AsyncClient, artist: str, track_name: s
                 else:
                     bpm = None
 
-            return {"preview": preview, "bpm": bpm, "isrc": isrc}
+            return {"preview": preview, "bpm": bpm, "isrc": isrc, "link": deezer_link}
         except Exception:
             logger.warning("Deezer lookup failed for '%s - %s'", artist, track_name, exc_info=True)
             return _EMPTY

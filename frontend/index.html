@@ -124,6 +124,32 @@
       <span id="action-status" class="action-status" aria-live="polite"></span>
     </div>
 
+    <section id="external-queue-panel" class="external-queue-panel hidden" aria-live="polite">
+      <div class="external-queue-head">
+        <h3>Queue Provider</h3>
+        <div class="external-queue-pref">
+          <label for="external-provider-pref">Provider</label>
+          <select id="external-provider-pref">
+            <option value="youtube_music">YouTube Music</option>
+            <option value="youtube">YouTube</option>
+            <option value="deezer">Deezer</option>
+            <option value="apple_music">Apple Music</option>
+            <option value="soundcloud">SoundCloud</option>
+            <option value="tidal">Tidal</option>
+          </select>
+        </div>
+      </div>
+      <div class="external-queue-actions">
+        <button id="external-open-current-btn" class="action-btn" type="button">Open Current</button>
+        <button id="external-mark-played-btn" class="action-btn" type="button">Mark Played</button>
+        <button id="external-prev-btn" class="action-btn" type="button">Prev</button>
+        <button id="external-next-btn" class="action-btn" type="button">Next</button>
+        <button id="external-clear-btn" class="action-btn" type="button">Clear</button>
+      </div>
+      <div id="external-queue-status" class="action-status"></div>
+      <div id="external-queue-list" class="external-queue-list"></div>
+    </section>
+
     <div class="results-layout">
       <div id="results" class="results"></div>
       <aside id="drill-side-panel" class="drill-side-panel hidden">

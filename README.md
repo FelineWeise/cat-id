@@ -11,6 +11,9 @@ A web app that finds songs similar to a given Spotify track using two discovery 
 - **Configurable similarity weights** — sliders for each audio dimension; traits with weight above 30% are used as recommendation targets
 - **30-second preview playback** via Deezer (fallback when Spotify previews are unavailable)
 - **Spotify integration** — album art, direct links, playlist creation, and queue control (requires OAuth)
+- **Provider-routed queue** — select queue provider in-app:
+  - `Spotify` (when connected) routes queue actions to your Spotify account queue
+  - external providers route actions to local external queue + provider links (Song.link/Odesli)
 - Configurable result count (5 / 10 / 20 / 50)
 
 ### Listener vs Audio Similarity
@@ -18,9 +21,9 @@ A web app that finds songs similar to a given Spotify track using two discovery 
 - **Listener Similarity:** finds tracks that people who listen to the seed track also tend to play; this is crowd/listening-pattern based.
 - **Audio Similarity:** finds tracks that sound close to the seed by comparing sonic features (tempo, energy, valence, danceability, acousticness, instrumentalness).
 - If Spotify audio-features access is unavailable, audio mode uses tag-based approximation and marks responses as approximated.
-- **Strict Spotify-ready results (default):** `strict_mapped_only` defaults to `true` on `/api/similar` and `/api/similar/audio`. The API only returns `similar_tracks` that have a `spotify_id`, so queue and playlist actions can use every listed track. You may get fewer than `limit` rows if some Last.fm candidates are not in Spotify’s catalog.
-- Optional **MusicBrainz** hints (`use_metadata_fallback`, default `true`) retry Spotify resolution when Deezer/Spotify text matching fails.
-- Set `strict_mapped_only` to `false` to include unmapped rows (Spotify URL may be null); queue/playlist still only send mapped URIs.
+- **Optional strict Spotify-only results:** set `strict_mapped_only` to `true` on `/api/similar` and `/api/similar/audio` to return only tracks with a `spotify_id` (every listed row is queue/playlist-safe). Default is `false` so you still see Last.fm-style matches even when Spotify mapping fails for some rows; queue/playlist actions only use mapped URIs.
+- Optional **MusicBrainz** hints (`use_metadata_fallback`, default `true`) retry Spotify resolution when Deezer/Spotify text matching fails, including URL relation extraction for direct Spotify track IDs when available.
+- If the user is connected to Spotify, mapping search prefers the user token path and then falls back to app-token search; anonymous users use app-token search only.
 
 ## Prerequisites
 
@@ -92,6 +95,9 @@ Useful local overrides:
 - If no active device is found, the backend attempts one automatic transfer to an available device, then retries queueing.
 - If no devices are available at all, open Spotify on desktop/mobile/web player first, then try queueing again.
 - Track links attempt to open the Spotify desktop/app first (`spotify:` deep link) and fall back to web player if the OS/browser does not hand off to the app.
+- Queue behavior is provider-routed from the queue area:
+  - If provider is Spotify and you're connected, both single-track and bulk `Add to Queue` use `/api/spotify/queue`.
+  - If provider is external, queue actions add tracks to local browser queue and open provider links.
 
 ## Local dev without a public URL
 
@@ -275,10 +281,11 @@ Details: [infrastructure/deploy/README.md](infrastructure/deploy/README.md), [in
 
 | Field | Default | Purpose |
 |-------|---------|--------|
-| `strict_mapped_only` | `true` | Only return tracks with a Spotify ID (queue/playlist-safe list). |
+| `strict_mapped_only` | `false` | If `true`, only return tracks with a Spotify ID (queue/playlist-safe list; may return fewer rows). |
 | `use_metadata_fallback` | `true` | On mapping miss, query MusicBrainz for ISRC/title/artist hints and retry Spotify. |
 
-**Response:** JSON with `seed_track` and `similar_tracks`, each containing name, artists, album, album art, Spotify URL, match score, BPM, and tags. Includes `strict_mapped_only` (echo), `mapped_count`, `unmapped_count`, and optional `mapping_degraded_reason`. With strict mode, every `similar_track` has `spotify_id`; `unmapped_count` is always `0` for the returned slice.
+**Response:** JSON with `seed_track` and `similar_tracks`, each containing name, artists, album, album art, Spotify URL, match score, BPM, and tags. Includes `strict_mapped_only` (echo), `mapped_count`, `unmapped_count`, optional `mapping_degraded_reason`, plus diagnostics (`mapping_used_user_token`, `mapping_source_counts`). With strict mode, every `similar_track` has `spotify_id`; `unmapped_count` is always `0` for the returned slice.
+For unmapped rows, responses can include `external_links` + `external_primary_provider` plus optional `external_links_degraded_reason` when enrichment is time/rate limited.
 `limit` is a maximum; backend overfetches Last.fm when strict so more candidates can be mapped. `total_candidates` is the size of the ranked pool **before** the final `limit` slice and before the strict mapped-only filter—so it can include unmapped rows even when `strict_mapped_only` is `true` (those rows are omitted from `similar_tracks` only).
 
 ### `POST /api/similar/audio` — Audio Similarity (Spotify)
@@ -318,6 +325,7 @@ Dimensions with weight > 0.3 are sent as `target_*` parameters to Spotify's reco
 - **Backend:** Python, FastAPI, Spotipy, httpx
 - **Frontend:** Vanilla HTML / CSS / JS
 - **APIs:** Spotify Web API (track lookup, audio features, recommendations), Last.fm (similarity), Deezer (audio previews), MusicBrainz (optional mapping hints)
+- **Link Aggregation:** Song.link/Odesli for external provider links when Spotify mapping is unavailable
 
 ## License
 

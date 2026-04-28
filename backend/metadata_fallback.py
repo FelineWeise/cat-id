@@ -12,10 +12,12 @@ logger = logging.getLogger(__name__)
 
 MUSICBRAINZ_RECORDING_SEARCH = "https://musicbrainz.org/ws/2/recording"
 MUSICBRAINZ_ISRC = "https://musicbrainz.org/ws/2/isrc"
+MUSICBRAINZ_RECORDING_LOOKUP = "https://musicbrainz.org/ws/2/recording"
 # MusicBrainz requires a descriptive User-Agent with contact URL.
 MB_USER_AGENT = "cat-id/2.1 (+https://github.com/FelineWeise/cat-id)"
 
 _NON_ALNUM = re.compile(r"[^a-z0-9\s]", re.I)
+_SPOTIFY_TRACK_RE = re.compile(r"open\.spotify\.com/track/([a-zA-Z0-9]{22})")
 
 
 def _sanitize_mb_query_part(value: str) -> str:
@@ -54,6 +56,88 @@ def _parse_hints_from_recordings(recordings: list[dict[str, Any]]) -> tuple[str 
     artist = _primary_artist_name(rec)
     isrc = _first_isrc_from_recording(rec)
     return isrc, artist, title_s
+
+
+def _spotify_track_id_from_relations(relations: list[dict[str, Any]] | None) -> str | None:
+    if not relations:
+        return None
+    for rel in relations:
+        if not isinstance(rel, dict):
+            continue
+        url_obj = rel.get("url")
+        if not isinstance(url_obj, dict):
+            continue
+        resource = str(url_obj.get("resource", "")).strip()
+        match = _SPOTIFY_TRACK_RE.search(resource)
+        if match:
+            return match.group(1)
+    return None
+
+
+async def fetch_musicbrainz_spotify_relation_id(
+    client: httpx.AsyncClient,
+    artist: str,
+    track_name: str,
+    known_isrc: str | None,
+) -> str | None:
+    """Resolve a Spotify track id from MusicBrainz URL relations when available."""
+    headers = {"User-Agent": MB_USER_AGENT, "Accept": "application/json"}
+    try:
+        if known_isrc and known_isrc.strip():
+            isrc_clean = known_isrc.strip().upper()
+            isrc_resp = await client.get(
+                f"{MUSICBRAINZ_ISRC}/{isrc_clean}",
+                params={"fmt": "json"},
+                headers=headers,
+                timeout=6.0,
+            )
+            if isrc_resp.status_code != 200:
+                return None
+            recordings = (isrc_resp.json() or {}).get("recordings") or []
+            for recording in recordings[:3]:
+                rec_id = recording.get("id")
+                if not rec_id:
+                    continue
+                rec_resp = await client.get(
+                    f"{MUSICBRAINZ_RECORDING_LOOKUP}/{rec_id}",
+                    params={"fmt": "json", "inc": "url-rels"},
+                    headers=headers,
+                    timeout=6.0,
+                )
+                if rec_resp.status_code != 200:
+                    continue
+                spotify_id = _spotify_track_id_from_relations((rec_resp.json() or {}).get("relations"))
+                if spotify_id:
+                    return spotify_id
+            return None
+
+        a = _sanitize_mb_query_part(artist)
+        t = _sanitize_mb_query_part(track_name)
+        if len(a) < 2 or len(t) < 2:
+            return None
+        query = f'artist:"{a}" AND recording:"{t}"'
+        search_resp = await client.get(
+            MUSICBRAINZ_RECORDING_SEARCH,
+            params={"query": query, "fmt": "json", "limit": 5, "inc": "url-rels"},
+            headers=headers,
+            timeout=6.0,
+        )
+        if search_resp.status_code != 200:
+            return None
+        recordings = (search_resp.json() or {}).get("recordings") or []
+        for rec in recordings:
+            spotify_id = _spotify_track_id_from_relations(rec.get("relations"))
+            if spotify_id:
+                return spotify_id
+        return None
+    except Exception:
+        logger.debug(
+            "MusicBrainz relation lookup failed for '%s - %s'",
+            artist,
+            track_name,
+            exc_info=True,
+        )
+        return None
 
 
 async def fetch_musicbrainz_hints(

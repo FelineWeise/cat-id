@@ -11,7 +11,7 @@ class TrackRequest(BaseModel):
         description="Lowercased 'artist::trackname' keys to exclude from results",
     )
     strict_mapped_only: bool = Field(
-        default=True,
+        default=False,
         description="If true, only Spotify-mapped tracks are returned (queue/playlist-safe).",
     )
     use_metadata_fallback: bool = Field(
@@ -51,7 +51,7 @@ class AudioSimilarRequest(BaseModel):
         description="Lowercased 'artist::trackname' keys to exclude from results",
     )
     strict_mapped_only: bool = Field(
-        default=True,
+        default=False,
         description="If true, only Spotify-mapped tracks are returned (queue/playlist-safe).",
     )
     use_metadata_fallback: bool = Field(
@@ -68,6 +68,9 @@ class TrackInfo(BaseModel):
     preview_url: str | None = None
     spotify_url: str | None = None
     spotify_id: str | None = None
+    mapping_source: str | None = None
+    external_links: dict[str, str] = Field(default_factory=dict)
+    external_primary_provider: str | None = None
     spotify_mapping_status: Literal["mapped", "unmapped"] = "mapped"
     match_score: float | None = None
     bpm: float | None = None
@@ -89,9 +92,21 @@ class SimilarTracksResponse(BaseModel):
     )
     mapped_count: int = Field(default=0, description="Number of tracks mapped to Spotify IDs.")
     unmapped_count: int = Field(default=0, description="Number of tracks without Spotify mapping.")
+    mapping_used_user_token: bool = Field(
+        default=False,
+        description="True if at least one mapped track was resolved via user-token search.",
+    )
+    mapping_source_counts: dict[str, int] = Field(
+        default_factory=dict,
+        description="Counts of mapping sources for mapped tracks (for diagnostics).",
+    )
     mapping_degraded_reason: str | None = Field(
         default=None,
         description="Reason mapping quality was reduced (for example rate limits or time budget).",
+    )
+    external_links_degraded_reason: str | None = Field(
+        default=None,
+        description="Reason external link enrichment was reduced (for example rate limits or time budget).",
     )
     tag_categories: dict[str, str] = Field(
         default_factory=dict,

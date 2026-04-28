@@ -4,6 +4,7 @@ import re
 import time
 from functools import lru_cache
 from difflib import SequenceMatcher
+from typing import Literal
 
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
@@ -25,17 +26,20 @@ TRACK_URI_PATTERN = re.compile(r"spotify:track:([a-zA-Z0-9]+)")
 
 TARGET_THRESHOLD = 0.3
 SPOTIFY_RATE_LIMIT_COOLDOWN_SECONDS = 180
-_spotify_mapping_throttled_until = 0.0
+_spotify_mapping_throttled_until = {"app": 0.0, "user": 0.0}
 _spotify_feature_throttled_until = 0.0
 MAPPING_RESULT_LIMIT = 5
 MAPPING_MIN_SCORE = 0.65
+MappingSource = Literal["app", "user"]
 
 
-def _set_mapping_throttled(retry_after_seconds: int | None = None) -> None:
-    global _spotify_mapping_throttled_until
+def _set_mapping_throttled(
+    retry_after_seconds: int | None = None,
+    source: MappingSource = "app",
+) -> None:
     cooldown = retry_after_seconds or SPOTIFY_RATE_LIMIT_COOLDOWN_SECONDS
-    _spotify_mapping_throttled_until = max(
-        _spotify_mapping_throttled_until,
+    _spotify_mapping_throttled_until[source] = max(
+        _spotify_mapping_throttled_until[source],
         time.monotonic() + max(1, cooldown),
     )
 
@@ -49,8 +53,8 @@ def _set_feature_throttled(retry_after_seconds: int | None = None) -> None:
     )
 
 
-def spotify_mapping_allowed() -> bool:
-    return time.monotonic() >= _spotify_mapping_throttled_until
+def spotify_mapping_allowed(source: MappingSource = "app") -> bool:
+    return time.monotonic() >= _spotify_mapping_throttled_until[source]
 
 
 def spotify_feature_calls_allowed() -> bool:
@@ -60,6 +64,7 @@ def spotify_feature_calls_allowed() -> bool:
 def _handle_spotify_rate_limit(
     exc: spotipy.SpotifyException,
     target: str,
+    source: MappingSource = "app",
 ) -> bool:
     if exc.http_status != 429:
         return False
@@ -69,10 +74,14 @@ def _handle_spotify_rate_limit(
     except Exception:
         retry_after = None
     if target == "mapping":
-        _set_mapping_throttled(retry_after)
+        _set_mapping_throttled(retry_after, source=source)
     else:
         _set_feature_throttled(retry_after)
-    logger.warning("Spotify API throttled for %s calls; entering cooldown.", target)
+    logger.warning(
+        "Spotify API throttled for %s calls (source=%s); entering cooldown.",
+        target,
+        source,
+    )
     return True
 
 
@@ -135,16 +144,50 @@ def get_track_info(url_or_uri: str) -> TrackInfo:
     return _track_to_info(sp.track(track_id))
 
 
-def resolve_spotify_track(artist: str, track_name: str, isrc: str | None = None) -> TrackInfo | None:
-    """Resolve a catalog track to Spotify: ISRC-first, then multi-pass text matching."""
+def resolve_spotify_track_with_source(
+    artist: str,
+    track_name: str,
+    isrc: str | None = None,
+    *,
+    user_sp: spotipy.Spotify | None = None,
+    spotify_id_hint: str | None = None,
+) -> tuple[TrackInfo | None, str | None]:
+    """Resolve a catalog track to Spotify and report source."""
     artist_norm = artist.strip().lower()
     track_norm = track_name.strip().lower()
     isrc_norm = isrc.strip().upper() if isrc else ""
-    if isrc_norm:
-        by_isrc = _search_track_by_isrc_cached(isrc_norm)
-        if by_isrc is not None:
-            return by_isrc
-    return _search_track_cached(artist_norm, track_norm)
+    hint_id = spotify_id_hint.strip() if spotify_id_hint else ""
+
+    if user_sp is not None:
+        track = _resolve_with_client(
+            user_sp,
+            source="user",
+            artist=artist_norm,
+            track_name=track_norm,
+            isrc=isrc_norm,
+            spotify_id_hint=hint_id,
+            market="from_token",
+        )
+        if track is not None:
+            return track, "user_token_search"
+
+    if hint_id:
+        hinted = _fetch_track_by_id_cached(hint_id)
+        if hinted is not None:
+            return hinted, "spotify_id_hint"
+
+    app_track = _resolve_with_cached_app(artist_norm, track_norm, isrc_norm)
+    if app_track is not None:
+        if isrc_norm and _search_track_by_isrc_cached(isrc_norm) is not None:
+            return app_track, "app_isrc_search"
+        return app_track, "app_text_search"
+    return None, None
+
+
+def resolve_spotify_track(artist: str, track_name: str, isrc: str | None = None) -> TrackInfo | None:
+    """Backward-compatible resolver that returns only TrackInfo."""
+    track, _ = resolve_spotify_track_with_source(artist, track_name, isrc)
+    return track
 
 
 def search_track(artist: str, track_name: str, isrc: str | None = None) -> TrackInfo | None:
@@ -154,11 +197,11 @@ def search_track(artist: str, track_name: str, isrc: str | None = None) -> Track
 
 @lru_cache(maxsize=1024)
 def _search_track_by_isrc_cached(isrc: str) -> TrackInfo | None:
-    if not isrc or not spotify_mapping_allowed():
+    if not isrc or not spotify_mapping_allowed("app"):
         return None
 
     sp = get_spotify_client()
-    items = _run_search_with_retry(sp, query=f"isrc:{isrc}", limit=1)
+    items = _run_search_with_retry(sp, query=f"isrc:{isrc}", limit=1, source="app")
     if not items:
         return None
     return _track_to_info(items[0])
@@ -166,10 +209,87 @@ def _search_track_by_isrc_cached(isrc: str) -> TrackInfo | None:
 
 @lru_cache(maxsize=1024)
 def _search_track_cached(artist: str, track_name: str) -> TrackInfo | None:
-    if not spotify_mapping_allowed():
+    if not spotify_mapping_allowed("app"):
         return None
 
     sp = get_spotify_client()
+    return _search_track_uncached(
+        sp,
+        source="app",
+        artist=artist,
+        track_name=track_name,
+    )
+
+
+def _resolve_with_cached_app(artist: str, track_name: str, isrc: str) -> TrackInfo | None:
+    if isrc:
+        by_isrc = _search_track_by_isrc_cached(isrc)
+        if by_isrc is not None:
+            return by_isrc
+    return _search_track_cached(artist, track_name)
+
+
+def _resolve_with_client(
+    sp: spotipy.Spotify,
+    *,
+    source: MappingSource,
+    artist: str,
+    track_name: str,
+    isrc: str,
+    spotify_id_hint: str,
+    market: str | None,
+) -> TrackInfo | None:
+    if not spotify_mapping_allowed(source):
+        return None
+    if spotify_id_hint:
+        hinted = _fetch_track_by_id(sp, spotify_id_hint, source=source)
+        if hinted is not None:
+            return hinted
+    if isrc:
+        by_isrc = _search_track_by_isrc(sp, isrc, source=source, market=market)
+        if by_isrc is not None:
+            return by_isrc
+    return _search_track_uncached(
+        sp,
+        source=source,
+        artist=artist,
+        track_name=track_name,
+        market=market,
+    )
+
+
+def _search_track_by_isrc(
+    sp: spotipy.Spotify,
+    isrc: str,
+    *,
+    source: MappingSource,
+    market: str | None = None,
+) -> TrackInfo | None:
+    if not isrc or not spotify_mapping_allowed(source):
+        return None
+    items = _run_search_with_retry(
+        sp,
+        query=f"isrc:{isrc}",
+        limit=1,
+        source=source,
+        market=market,
+    )
+    if not items:
+        return None
+    return _track_to_info(items[0])
+
+
+def _search_track_uncached(
+    sp: spotipy.Spotify,
+    *,
+    source: MappingSource,
+    artist: str,
+    track_name: str,
+    market: str | None = None,
+) -> TrackInfo | None:
+    if not spotify_mapping_allowed(source):
+        return None
+
     normalized_title = _normalize_track_title(track_name)
 
     passes: list[tuple[str, int]] = [
@@ -181,7 +301,13 @@ def _search_track_cached(artist: str, track_name: str) -> TrackInfo | None:
     best_track: TrackInfo | None = None
     best_score = 0.0
     for query, limit in passes:
-        items = _run_search_with_retry(sp, query=query, limit=limit)
+        items = _run_search_with_retry(
+            sp,
+            query=query,
+            limit=limit,
+            source=source,
+            market=market,
+        )
         if not items:
             continue
         candidate, score = _pick_best_mapping_candidate(items, artist, track_name)
@@ -196,23 +322,57 @@ def _search_track_cached(artist: str, track_name: str) -> TrackInfo | None:
     return None
 
 
-def _run_search_with_retry(sp: spotipy.Spotify, query: str, limit: int) -> list[dict]:
-    if not spotify_mapping_allowed():
+def _run_search_with_retry(
+    sp: spotipy.Spotify,
+    query: str,
+    limit: int,
+    *,
+    source: MappingSource,
+    market: str | None = None,
+) -> list[dict]:
+    if not spotify_mapping_allowed(source):
         return []
 
     attempts = 2
     for attempt in range(attempts):
         try:
-            results = sp.search(q=query, type="track", limit=limit)
+            if market:
+                results = sp.search(q=query, type="track", limit=limit, market=market)
+            else:
+                results = sp.search(q=query, type="track", limit=limit)
             return results.get("tracks", {}).get("items", [])
         except spotipy.SpotifyException as exc:
-            if _handle_spotify_rate_limit(exc, target="mapping"):
+            if _handle_spotify_rate_limit(exc, target="mapping", source=source):
                 if attempt == attempts - 1:
                     return []
                 time.sleep(0.25 * (attempt + 1))
                 continue
             raise
     return []
+
+
+@lru_cache(maxsize=2048)
+def _fetch_track_by_id_cached(track_id: str) -> TrackInfo | None:
+    if not track_id or not spotify_mapping_allowed("app"):
+        return None
+    sp = get_spotify_client()
+    return _fetch_track_by_id(sp, track_id, source="app")
+
+
+def _fetch_track_by_id(
+    sp: spotipy.Spotify,
+    track_id: str,
+    *,
+    source: MappingSource,
+) -> TrackInfo | None:
+    if not track_id or not spotify_mapping_allowed(source):
+        return None
+    try:
+        return _track_to_info(sp.track(track_id))
+    except spotipy.SpotifyException as exc:
+        if _handle_spotify_rate_limit(exc, target="mapping", source=source):
+            return None
+        return None
 
 
 def _normalize_track_title(value: str) -> str:
