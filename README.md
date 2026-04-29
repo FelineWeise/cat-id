@@ -1,27 +1,25 @@
 # Follow Your Cat ID
 
-A web app that finds songs similar to a given Spotify track using two discovery modes: **Listener Similarity** (Last.fm collaborative filtering) and **Audio Similarity** (Spotify audio features + recommendations with configurable dimension weights).
+A web app that finds songs similar to a given Spotify track through one unified discovery flow that blends listener and audio signals.
 
 ## Features
 
 - **Spotify URL input** — paste any Spotify track link
-- **Dual discovery modes:**
-  - **Listener Similarity** — finds tracks that listeners of the seed track also enjoy via Last.fm, with match scores, BPM filtering, and tag-based re-ranking
-  - **Audio Similarity** — pulls Spotify audio features for the seed track, passes weighted targets to Spotify's recommendations API, and ranks candidates by weighted distance across tempo, energy, valence, danceability, acousticness, and instrumentalness
+- **Unified blended similarity** — merges listener-style and audio-style signals into a single ranked result list
 - **Configurable similarity weights** — sliders for each audio dimension; traits with weight above 30% are used as recommendation targets
 - **30-second preview playback** via Deezer (fallback when Spotify previews are unavailable)
 - **Spotify integration** — album art, direct links, playlist creation, and queue control (requires OAuth)
 - **Provider-routed queue** — select queue provider in-app:
   - `Spotify` (when connected) routes queue actions to your Spotify account queue
-- **Text playlist builder** — add visible/individual results to a text list, export `playlist-export.txt`, and create a Spotify playlist directly from that text list in-app
+- **Memory Board** — save tracks (`+ Board`), persist locally, batch-create Spotify playlists, and copy board items as fallback text
 - Configurable result count (5 / 10 / 20 / 50)
 
-### Listener vs Audio Similarity
+### Unified similarity behavior
 
-- **Listener Similarity:** finds tracks that people who listen to the seed track also tend to play; this is crowd/listening-pattern based.
-- **Audio Similarity:** finds tracks that sound close to the seed by comparing sonic features (tempo, energy, valence, danceability, acousticness, instrumentalness).
-- If Spotify audio-features access is unavailable, audio mode uses tag-based approximation and marks responses as approximated.
-- **Optional strict Spotify-only results:** set `strict_mapped_only` to `true` on `/api/similar` and `/api/similar/audio` to return only tracks with a `spotify_id` (every listed row is queue/playlist-safe). Default is `false` so you still see Last.fm-style matches even when Spotify mapping fails for some rows; queue/playlist actions only use mapped URIs.
+- The app uses one similarity pipeline and one result surface.
+- The backend blends listener and audio candidates into one ranking contract.
+- If Spotify audio-features access is unavailable, approximation and third-party analysis enrichment are used.
+- **Optional strict Spotify-only results:** set `strict_mapped_only` to `true` on `/api/similar/unified` to return only tracks with a `spotify_id` (queue/playlist-safe rows).
 - Optional **MusicBrainz** hints (`use_metadata_fallback`, default `true`) retry Spotify resolution when Deezer/Spotify text matching fails, including URL relation extraction for direct Spotify track IDs when available.
 - If the user is connected to Spotify, mapping/search/queue calls use the user token path; anonymous users use app-token mapping.
 
@@ -151,7 +149,7 @@ Point `APP_BASE_URL` and `SPOTIFY_REDIRECT_URI` at your real public URL (e.g. `h
 
 ## Simple terminal deployment (Scaleway)
 
-**Slim production path:** LAED Terraform owns the **VM, IP, volume, and cloud-init**. This repo owns **Scaleway DNS** ([`infrastructure/dns/`](infrastructure/dns/)), **production Compose + Caddy** with **registry-only images** ([`infrastructure/deploy/`](infrastructure/deploy/)), and **optional** a dedicated **registry namespace** ([`infrastructure/registry/`](infrastructure/registry/)). Workflow: **push image to Scaleway CR → SSH to LAED host → `docker compose pull && up -d`** from e.g. `/opt/cat-id-data`. Full steps: [`docs/deploy_scaleway.md`](docs/deploy_scaleway.md).
+**Slim production path:** LAED Terraform owns the **VM, IP, volume, and cloud-init**. This repo owns **Scaleway DNS** ([`infrastructure/dns/`](infrastructure/dns/)), **production Compose + Caddy** with **registry-only images** ([`infrastructure/deploy/`](infrastructure/deploy/)), and **optional** a dedicated **registry namespace** ([`infrastructure/registry/`](infrastructure/registry/)). Workflow: **push image to Scaleway CR → SSH to LAED host → `docker compose pull && up -d`** from e.g. `/opt/cat-id`. Full steps: [`docs/deploy_scaleway.md`](docs/deploy_scaleway.md).
 
 ### Domain + Spotify production wiring
 
@@ -252,11 +250,11 @@ git remote set-url origin https://github.com/FelineWeise/cat-id.git
 
 2. **SSH** to the **LAED** base host.
 
-3. From the directory holding **`infrastructure/deploy/`** files (e.g. **`/opt/cat-id-data`**), set **`CAT_ID_IMAGE`** to the new tag/digest and redeploy:
+3. From the directory holding **`infrastructure/deploy/`** files (e.g. **`/opt/cat-id`**), set **`CAT_ID_IMAGE`** to the new tag/digest and redeploy:
 
 ```bash
 ssh <user>@<laed-base-ip>
-cd /opt/cat-id-data
+cd /opt/cat-id
 export CAT_ID_IMAGE=rg.fr-par.scw.cloud/cat-id/app:v1.0.0
 docker compose pull
 docker compose up -d
@@ -292,7 +290,7 @@ For local builds instead of pulled images, use `up -d --build`.
 
 ## Docker Compose layouts
 
-**Production (Scaleway CR, LAED host):** copy [`infrastructure/deploy/`](infrastructure/deploy/) to e.g. `/opt/cat-id-data` and run `docker compose` there with **`CAT_ID_IMAGE`** pointing at `rg.<region>.scw.cloud/...` — no `build:` in that file.
+**Production (Scaleway CR, LAED host):** copy [`infrastructure/deploy/`](infrastructure/deploy/) to e.g. `/opt/cat-id` and run `docker compose` there with **`CAT_ID_IMAGE`** pointing at `rg.<region>.scw.cloud/...` — no `build:` in that file.
 
 **Dev / convenience** under `infrastructure/compose/`:
 
@@ -308,7 +306,7 @@ Details: [infrastructure/deploy/README.md](infrastructure/deploy/README.md), [in
 
 ## API
 
-### `POST /api/similar` — Listener Similarity (Last.fm)
+### `POST /api/similar/unified` — Unified Similarity
 
 **Request body:**
 
@@ -330,43 +328,20 @@ Details: [infrastructure/deploy/README.md](infrastructure/deploy/README.md), [in
 For unmapped rows, responses can include `external_links` + `external_primary_provider` plus optional `external_links_degraded_reason` when enrichment is time/rate limited.
 `limit` is a maximum; backend overfetches Last.fm when strict so more candidates can be mapped. `total_candidates` is the size of the ranked pool **before** the final `limit` slice and before the strict mapped-only filter—so it can include unmapped rows even when `strict_mapped_only` is `true` (those rows are omitted from `similar_tracks` only).
 
-### `POST /api/similar/audio` — Audio Similarity (Spotify)
-
-**Request body:**
-
-```json
-{
-  "url": "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT",
-  "limit": 20,
-  "strict_mapped_only": true,
-  "use_metadata_fallback": true,
-  "weights": {
-    "tempo": 0.8,
-    "energy": 0.6,
-    "valence": 0.4,
-    "danceability": 0.0,
-    "acousticness": 0.5,
-    "instrumentalness": 0.0
-  }
-}
-```
-
-Dimensions with weight > 0.3 are sent as `target_*` parameters to Spotify's recommendations endpoint. All candidates are then scored by weighted Euclidean distance from the seed's audio features.
-
-**Response:** Same shape as `/api/similar`, with `audio_features` populated on each track.
+**Response:** Same top-level shape as previous similarity endpoints (`seed_track`, `similar_tracks`) with unified blended ranking and optional enriched `analysis_metrics`.
 
 ## How It Works
 
 1. **Spotify** resolves the pasted URL to track metadata (name, artist, album art)
-2. **Listener mode:** Last.fm `track.getSimilar` returns tracks based on collaborative listening patterns; results are enriched with Spotify metadata, Deezer BPM/previews, and Last.fm tags
-3. **Audio mode:** Spotify `audio-features` extracts the seed's audio profile; weighted targets are passed to `recommendations`; candidates are scored by normalized distance per dimension
+2. Last.fm and audio-signal candidates are enriched and blended into one ranked list
+3. Filters can be passed to backend and refined client-side for remaining criteria
 4. **Deezer** provides 30-second audio previews as a fallback
 
 ## Tech Stack
 
 - **Backend:** Python, FastAPI, Spotipy, httpx
 - **Frontend:** Vanilla HTML / CSS / JS
-- **APIs:** Spotify Web API (track lookup, audio features, recommendations), Last.fm (similarity), Deezer (audio previews), MusicBrainz (optional mapping hints)
+- **APIs:** Spotify Web API (track lookup, queue, playlist), Last.fm (similarity), Deezer (audio previews), MusicBrainz (optional mapping hints), SoundNet Track Analysis API (enriched metrics)
 - **Link Aggregation:** Song.link/Odesli for external provider links when Spotify mapping is unavailable
 
 ## License

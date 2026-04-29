@@ -1,6 +1,6 @@
 # Compose (Docker on Scaleway)
 
-Docker Compose files and Caddy config for **local/dev** and convenience layouts. **Production on the LAED host** with Scaleway Container Registry images only: use [`../deploy/`](../deploy/) (copy to e.g. `/opt/cat-id-data`); see [../../docs/deploy_scaleway.md](../../docs/deploy_scaleway.md).
+Docker Compose files and Caddy config for **local/dev** and convenience layouts. **Production on the LAED host** with Scaleway Container Registry images only: use [`../deploy/`](../deploy/) (copy to e.g. `/opt/cat-id`); see [../../docs/deploy_scaleway.md](../../docs/deploy_scaleway.md).
 
 ## Production stack (app + TLS)
 

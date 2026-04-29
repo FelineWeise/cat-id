@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from difflib import SequenceMatcher
 
 import httpx
+import spotipy
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
@@ -35,14 +36,19 @@ from backend.config import (
 from backend.lastfm import fetch_track_tags, get_similar_tracks, get_track_tags
 from backend.models import (
     AudioSimilarRequest,
+    AudioWeights,
+    PlaylistLookupItem,
     SimilarTracksResponse,
+    SimilarityFilters,
     TextPlaylistCreateRequest,
     TextPlaylistCreateResponse,
     TextPlaylistUnmatched,
     TrackInfo,
     TrackRequest,
+    UnifiedSimilarRequest,
 )
 from backend.link_aggregator import resolve_external_links
+from backend.audio_analysis import fetch_analysis_metrics
 from backend.spotify import (
     build_recommendation_targets,
     compute_similarity,
@@ -53,8 +59,10 @@ from backend.spotify import (
     spotify_mapping_allowed,
 )
 from backend.spotify_auth import (
+    build_pkce_pair,
     exchange_code,
     get_authorize_url,
+    get_authorize_url_pkce,
     get_user_client,
     refresh_if_needed,
 )
@@ -356,6 +364,7 @@ async def _enrich_lastfm(
                             candidate_isrc,
                             user_sp=user_sp,
                             spotify_id_hint=mb_spotify_id,
+                            allow_app_fallback=user_sp is None,
                         )
 
                 if (
@@ -493,6 +502,101 @@ def _mapping_summary(tracks: Sequence[TrackInfo]) -> tuple[int, int]:
     return mapped, max(0, len(tracks) - mapped)
 
 
+def _blend_track_lists(
+    listener_tracks: list[TrackInfo],
+    audio_tracks: list[TrackInfo],
+) -> list[TrackInfo]:
+    by_key: dict[str, TrackInfo] = {}
+    listener_scores: dict[str, float] = {}
+    audio_scores: dict[str, float] = {}
+    sources: dict[str, set[str]] = {}
+
+    def track_key(track: TrackInfo) -> str:
+        artist = track.artists[0] if track.artists else ""
+        return f"{artist.strip().lower()}::{track.name.strip().lower()}"
+
+    for track in listener_tracks:
+        key = track_key(track)
+        by_key[key] = track
+        listener_scores[key] = float(track.match_score or 0.0)
+        sources.setdefault(key, set()).add("listener")
+
+    for track in audio_tracks:
+        key = track_key(track)
+        if key not in by_key:
+            by_key[key] = track
+        elif not by_key[key].spotify_id and track.spotify_id:
+            by_key[key] = track
+        audio_scores[key] = float(track.match_score or 0.0)
+        sources.setdefault(key, set()).add("audio")
+
+    blended: list[TrackInfo] = []
+    for key, track in by_key.items():
+        ls = listener_scores.get(key, 0.0)
+        aps = audio_scores.get(key, 0.0)
+        score = (ls * 0.55) + (aps * 0.45)
+        track.match_score = score
+        track.analysis_metrics = {
+            **(track.analysis_metrics or {}),
+            "listenerScore": ls,
+            "audioScore": aps,
+            "blendedScore": score,
+            "sources": ",".join(sorted(sources.get(key, set()))),
+        }
+        blended.append(track)
+    blended.sort(key=_fused_rank_value, reverse=True)
+    return blended
+
+
+def _apply_backend_filters(
+    tracks: list[TrackInfo],
+    filters: SimilarityFilters,
+) -> list[TrackInfo]:
+    filtered: list[TrackInfo] = []
+    wanted_tags = {normalize_tag(tag) for tag in filters.tags_any}
+    for track in tracks:
+        if filters.bpm_min is not None and (track.bpm is None or track.bpm < filters.bpm_min):
+            continue
+        if filters.bpm_max is not None and (track.bpm is None or track.bpm > filters.bpm_max):
+            continue
+        # Metadata fields are often missing on fallback-enriched tracks.
+        # Do not exclude unknown values here; let client-side post-filters
+        # handle strict filtering when metadata is available.
+        if (
+            filters.popularity_min is not None
+            and track.popularity is not None
+            and track.popularity < filters.popularity_min
+        ):
+            continue
+        if (
+            filters.popularity_max is not None
+            and track.popularity is not None
+            and track.popularity > filters.popularity_max
+        ):
+            continue
+        if (
+            filters.release_year_min is not None
+            and track.release_year is not None
+            and track.release_year < filters.release_year_min
+        ):
+            continue
+        if (
+            filters.release_year_max is not None
+            and track.release_year is not None
+            and track.release_year > filters.release_year_max
+        ):
+            continue
+        if filters.require_instrumental is True:
+            tags = {normalize_tag(tag) for tag in (track.tags or [])}
+            if not bool(tags & INSTRUMENTAL_TAGS):
+                continue
+        if wanted_tags:
+            tags = {normalize_tag(tag) for tag in (track.tags or [])}
+            if not (tags & wanted_tags):
+                continue
+        filtered.append(track)
+    return filtered
+
 def _should_retry_spotify_resolve(
     artist_name: str,
     track_name: str,
@@ -527,8 +631,25 @@ def _get_mapping_user_sp(request: Request):
         return None
 
 
-@app.post("/api/similar", response_model=SimilarTracksResponse)
-async def api_similar(req: TrackRequest, request: Request):
+async def _enrich_analysis_metrics(tracks: list[TrackInfo], client: httpx.AsyncClient) -> None:
+    async def enrich_single(track: TrackInfo) -> None:
+        artist = track.artists[0] if track.artists else ""
+        metrics = await fetch_analysis_metrics(
+            artist=artist,
+            title=track.name,
+            spotify_id=track.spotify_id,
+            client=client,
+        )
+        if metrics:
+            track.analysis_metrics = {**(track.analysis_metrics or {}), **metrics}
+            if track.bpm is None and isinstance(metrics.get("tempo"), (int, float)):
+                track.bpm = float(metrics["tempo"])
+
+    await asyncio.gather(*(enrich_single(track) for track in tracks))
+
+
+@app.post("/api/similar/unified", response_model=SimilarTracksResponse)
+async def api_similar_unified(req: UnifiedSimilarRequest, request: Request):
     mapping_user_sp = _get_mapping_user_sp(request)
     try:
         seed = await asyncio.to_thread(get_track_info, req.url, mapping_user_sp)
@@ -540,7 +661,7 @@ async def api_similar(req: TrackRequest, request: Request):
     exclude = set(req.exclude) if req.exclude else None
     fetch_limit = _listener_fetch_limit(req.limit, req.strict_mapped_only)
     try:
-        similar, seed_tags, mapping_degraded_reason, external_links_degraded_reason = await _enrich_lastfm(
+        listener_similar, seed_tags, mapping_degraded_reason, external_links_degraded_reason = await _enrich_lastfm(
             seed,
             fetch_limit,
             exclude,
@@ -552,66 +673,71 @@ async def api_similar(req: TrackRequest, request: Request):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Last.fm API error: {exc}")
 
+    audio_req = AudioSimilarRequest(
+        url=req.url,
+        limit=max(req.limit, min(req.limit * 2, 100)),
+        weights=req.weights,
+        exclude=req.exclude,
+        strict_mapped_only=False,
+        use_metadata_fallback=req.use_metadata_fallback,
+    )
+    audio_response = await _audio_fallback_path(seed, audio_req, request)
+    blended = _blend_track_lists(listener_similar, audio_response.similar_tracks)
+
     all_tags: set[str] = set(seed_tags)
-    for t in similar:
+    for t in blended:
         all_tags.update(t.tags or [])
+    for t in audio_response.seed_tags:
+        all_tags.add(t)
     tag_categories = build_tag_categories(list(all_tags))
 
-    similar.sort(key=_fused_rank_value, reverse=True)
+    client = _get_http_client()
+    await _enrich_analysis_metrics(blended, client)
+    filtered = _apply_backend_filters(blended, req.filters)
+
     return _build_similar_response(
         seed=seed,
-        similar_ranked=similar,
+        similar_ranked=filtered,
         limit=req.limit,
         strict_mapped_only=req.strict_mapped_only,
         seed_tags=seed_tags,
         tag_categories=tag_categories,
         mapping_degraded_reason=mapping_degraded_reason,
         external_links_degraded_reason=external_links_degraded_reason,
+        approximated=True,
+    )
+
+
+@app.post("/api/similar", response_model=SimilarTracksResponse)
+async def api_similar(req: TrackRequest, request: Request):
+    return await api_similar_unified(
+        UnifiedSimilarRequest(
+            url=req.url,
+            limit=req.limit,
+            exclude=req.exclude,
+            strict_mapped_only=req.strict_mapped_only,
+            use_metadata_fallback=req.use_metadata_fallback,
+            filters=SimilarityFilters(),
+            weights=AudioWeights(),
+        ),
+        request,
     )
 
 
 @app.post("/api/similar/audio", response_model=SimilarTracksResponse)
 async def api_similar_audio(req: AudioSimilarRequest, request: Request):
-    """Audio similarity with weighted dimensions.
-
-    Tries Spotify audio-features + recommendations first.
-    Falls back to Last.fm candidates + tag-estimated features when the
-    Spotify endpoints return 403 (restricted app).
-    """
-    mapping_user_sp = _get_mapping_user_sp(request)
-    # 1. Resolve seed track
-    try:
-        seed = await asyncio.to_thread(get_track_info, req.url, mapping_user_sp)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Spotify API error: {exc}")
-
-    if not seed.spotify_id:
-        raise HTTPException(status_code=400, detail="Could not resolve a Spotify track ID.")
-
-    # 2. Try Spotify audio-features for the seed
-    seed_features = None
-    spotify_available = False
-    feature_source = "user" if mapping_user_sp is not None else "app"
-    try:
-        features_map = await asyncio.to_thread(
-            get_audio_features,
-            [seed.spotify_id],
-            mapping_user_sp,
-            source=feature_source,
-        )
-        seed_features = features_map.get(seed.spotify_id)
-        spotify_available = seed_features is not None
-    except ValueError:
-        logger.info("Spotify audio-features unavailable, falling back to tag estimation")
-    except Exception as exc:
-        logger.warning("Audio features fetch failed: %s", exc)
-
-    if spotify_available:
-        return await _audio_spotify_path(seed, seed_features, req, mapping_user_sp)
-
-    return await _audio_fallback_path(seed, req, request)
+    return await api_similar_unified(
+        UnifiedSimilarRequest(
+            url=req.url,
+            limit=req.limit,
+            weights=req.weights,
+            exclude=req.exclude,
+            strict_mapped_only=req.strict_mapped_only,
+            use_metadata_fallback=req.use_metadata_fallback,
+            filters=SimilarityFilters(),
+        ),
+        request,
+    )
 
 
 async def _audio_spotify_path(
@@ -775,22 +901,25 @@ def spotify_oauth_config():
 def spotify_login():
     """Redirect browser to Spotify authorization page."""
     state = secrets.token_urlsafe(16)
-    url = get_authorize_url(state=state)
+    verifier, challenge = build_pkce_pair()
+    url = get_authorize_url_pkce(state=state, code_challenge=challenge)
     resp = RedirectResponse(url=url)
     resp.set_cookie("sp_state", state, httponly=True, secure=True, samesite="lax", max_age=300)
+    resp.set_cookie("sp_code_verifier", verifier, httponly=True, secure=True, samesite="lax", max_age=300)
     return resp
 
 
 @app.get("/api/spotify/callback")
 def spotify_callback(request: Request, code: str = "", error: str = "", state: str = ""):
     saved_state = request.cookies.get("sp_state", "")
+    code_verifier = request.cookies.get("sp_code_verifier", "")
     if error:
         return RedirectResponse(url=f"/?spotify_error={error}")
     if not code or state != saved_state:
         return RedirectResponse(url="/?spotify_error=state_mismatch")
 
     try:
-        token_info = exchange_code(code)
+        token_info = exchange_code(code, code_verifier=code_verifier or None)
     except Exception as exc:
         logging.error("Spotify token exchange failed: %s", exc)
         return RedirectResponse(url="/?spotify_error=token_exchange_failed")
@@ -801,6 +930,7 @@ def spotify_callback(request: Request, code: str = "", error: str = "", state: s
     resp = RedirectResponse(url="/?spotify_connected=1")
     resp.set_cookie("sp_session", session_id, httponly=True, secure=True, samesite="lax", max_age=3600)
     resp.delete_cookie("sp_state")
+    resp.delete_cookie("sp_code_verifier")
     return resp
 
 
@@ -846,15 +976,23 @@ class PlaylistRequest(BaseModel):
     public: bool = False
 
 
+class PlaylistAddTracksRequest(BaseModel):
+    track_uris: list[str] = Field(min_length=1)
+
+
 @app.post("/api/spotify/playlist")
 def create_playlist(req: PlaylistRequest, request: Request):
     """Create a Spotify playlist and add the given tracks."""
     try:
         sp = _get_user_sp(request)
         user_id = sp.current_user()["id"]
-        playlist = sp.user_playlist_create(user_id, req.name, public=req.public)
+        playlist = _run_spotify_write_with_retry(
+            lambda: sp.user_playlist_create(user_id, req.name, public=req.public)
+        )
         for i in range(0, len(req.track_uris), 100):
-            sp.playlist_add_items(playlist["id"], req.track_uris[i : i + 100])
+            _run_spotify_write_with_retry(
+                lambda chunk=req.track_uris[i : i + 100]: sp.playlist_add_items(playlist["id"], chunk)
+            )
         return {
             "playlist_id": playlist["id"],
             "playlist_url": playlist["external_urls"]["spotify"],
@@ -874,12 +1012,83 @@ def create_playlist(req: PlaylistRequest, request: Request):
         )
 
 
+@app.get("/api/spotify/playlists", response_model=list[PlaylistLookupItem])
+def list_playlists(request: Request):
+    sp = _get_user_sp(request)
+    items: list[PlaylistLookupItem] = []
+    offset = 0
+    while offset < 200:
+        payload = sp.current_user_playlists(limit=50, offset=offset)
+        playlist_items = payload.get("items", []) if isinstance(payload, dict) else []
+        for item in playlist_items:
+            items.append(
+                PlaylistLookupItem(
+                    id=item.get("id", ""),
+                    name=item.get("name", "Untitled"),
+                    uri=item.get("uri", ""),
+                    owner=(item.get("owner", {}) or {}).get("display_name") or (item.get("owner", {}) or {}).get("id") or "",
+                    public=item.get("public"),
+                    tracks_total=(item.get("tracks", {}) or {}).get("total"),
+                )
+            )
+        if not payload.get("next"):
+            break
+        offset += 50
+    return items
+
+
+@app.post("/api/spotify/playlists/{playlist_id}/tracks")
+def add_tracks_to_playlist(playlist_id: str, req: PlaylistAddTracksRequest, request: Request):
+    sp = _get_user_sp(request)
+    for i in range(0, len(req.track_uris), 100):
+        _run_spotify_write_with_retry(
+            lambda chunk=req.track_uris[i : i + 100]: sp.playlist_add_items(playlist_id, chunk)
+        )
+    return {"playlist_id": playlist_id, "added": len(req.track_uris)}
+
+
 class QueueRequest(BaseModel):
     track_uris: list[str] = Field(min_length=1)
 
 
+@app.get("/api/spotify/search-track")
+def spotify_search_track(q: str, request: Request):
+    sp = _get_user_sp(request)
+    response = sp.search(q=q, type="track", limit=1, market="from_token")
+    items = response.get("tracks", {}).get("items", [])
+    if not items:
+        return {"spotify_uri": None}
+    track_id = items[0].get("id")
+    if not track_id:
+        return {"spotify_uri": None}
+    return {"spotify_uri": f"spotify:track:{track_id}"}
+
+
 def _err_text(exc: Exception) -> str:
     return str(exc).lower()
+
+
+def _retry_after_seconds(exc: Exception) -> int | None:
+    if not isinstance(exc, spotipy.SpotifyException):
+        return None
+    if exc.http_status != 429:
+        return None
+    try:
+        return int((exc.headers or {}).get("Retry-After", "1"))
+    except Exception:
+        return 1
+
+
+def _run_spotify_write_with_retry(action, *, attempts: int = 5):
+    for attempt in range(attempts):
+        try:
+            return action()
+        except Exception as exc:
+            retry_after = _retry_after_seconds(exc)
+            if retry_after is None or attempt == attempts - 1:
+                raise
+            wait_seconds = retry_after * (2 ** attempt)
+            time.sleep(wait_seconds)
 
 
 def _is_no_active_device_error(exc: Exception) -> bool:
@@ -998,7 +1207,7 @@ def add_to_queue(req: QueueRequest, request: Request):
 
     for uri in req.track_uris:
         try:
-            sp.add_to_queue(uri)
+            _run_spotify_write_with_retry(lambda: sp.add_to_queue(uri))
             added += 1
         except Exception as exc:
             recoverable = _is_no_active_device_error(exc) or _is_restricted_device_error(exc)
@@ -1007,7 +1216,7 @@ def add_to_queue(req: QueueRequest, request: Request):
                 recovered_player = True
                 if ok:
                     try:
-                        sp.add_to_queue(uri)
+                        _run_spotify_write_with_retry(lambda: sp.add_to_queue(uri))
                         added += 1
                         continue
                     except Exception as retry_exc:
@@ -1059,11 +1268,13 @@ def create_playlist_from_text(req: TextPlaylistCreateRequest, request: Request):
             unmatched.append(TextPlaylistUnmatched(line=line, reason="Could not parse line format"))
             continue
         try:
-            response = sp.search(
-                q=f"artist:{artist} track:{title}",
-                type="track",
-                limit=1,
-                market="from_token",
+            response = _run_spotify_write_with_retry(
+                lambda: sp.search(
+                    q=f"artist:{artist} track:{title}",
+                    type="track",
+                    limit=1,
+                    market="from_token",
+                )
             )
             items = response.get("tracks", {}).get("items", [])
         except Exception:
@@ -1089,9 +1300,13 @@ def create_playlist_from_text(req: TextPlaylistCreateRequest, request: Request):
         )
 
     user_id = sp.current_user()["id"]
-    playlist = sp.user_playlist_create(user_id, playlist_name, public=False)
+    playlist = _run_spotify_write_with_retry(
+        lambda: sp.user_playlist_create(user_id, playlist_name, public=False)
+    )
     for i in range(0, len(uris), 100):
-        sp.playlist_add_items(playlist["id"], uris[i : i + 100])
+        _run_spotify_write_with_retry(
+            lambda chunk=uris[i : i + 100]: sp.playlist_add_items(playlist["id"], chunk)
+        )
 
     return TextPlaylistCreateResponse(
         playlist_id=playlist["id"],

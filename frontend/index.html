@@ -7,136 +7,186 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="container">
-    <header>
-      <h1>Follow Your Cat ID</h1>
-      <p class="subtitle">Track a Spotify track. Find your next Cat ID.</p>
+  <div class="app-shell">
+    <header class="app-header">
+      <div>
+        <h1>Follow Your Cat ID</h1>
+        <p class="subtitle">Track a Spotify track. Find your next Cat ID.</p>
+      </div>
+      <div id="spotify-auth" class="spotify-auth">
+        <button id="spotify-login-btn" class="spotify-login-btn">Connect Spotify</button>
+        <span id="spotify-user" class="spotify-user hidden"></span>
+        <button id="spotify-logout-btn" class="spotify-logout-btn hidden">Disconnect</button>
+      </div>
     </header>
 
-    <div id="spotify-auth" class="spotify-auth">
-      <button id="spotify-login-btn" class="spotify-login-btn">Connect Spotify</button>
-      <span id="spotify-user" class="spotify-user hidden"></span>
-      <button id="spotify-logout-btn" class="spotify-logout-btn hidden">Disconnect</button>
-    </div>
+    <main class="app-grid">
+      <section class="main-column">
+        <form id="search-form" class="surface-card">
+          <div class="input-row">
+            <input
+              type="text"
+              id="track-url"
+              placeholder="https://open.spotify.com/track/..."
+              required
+            />
+            <button type="submit" id="search-btn">Find Similar</button>
+            <button type="button" id="reload-btn">Reload</button>
+          </div>
 
-    <div class="mode-toggle">
-      <button id="mode-lastfm" class="mode-btn" data-mode="lastfm">Listener Similarity</button>
-      <button id="mode-audio" class="mode-btn active" data-mode="audio">Audio Similarity</button>
-    </div>
-    <p class="mode-help">
-      Listener similarity follows crowd listening patterns. Audio similarity matches sonic traits like BPM, energy, and instrumentalness.
-    </p>
+          <div class="limit-row">
+            <label for="limit">Results:</label>
+            <select id="limit">
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="20">20</option>
+              <option value="50" selected>50</option>
+            </select>
+          </div>
+        </form>
 
-    <form id="search-form">
-      <div class="input-row">
-        <input
-          type="text"
-          id="track-url"
-          placeholder="https://open.spotify.com/track/..."
-          required
-        />
-        <button type="submit" id="search-btn">Find Similar</button>
-        <button type="button" id="reload-btn">Reload</button>
-      </div>
-
-      <div class="limit-row">
-        <label for="limit">Results:</label>
-        <select id="limit">
-          <option value="5">5</option>
-          <option value="10">10</option>
-          <option value="20">20</option>
-          <option value="50" selected>50</option>
-        </select>
-      </div>
-    </form>
-
-    <div id="audio-weights" class="audio-weights hidden">
-      <label class="weights-heading">Similarity Weights <span class="hint">(dimensions above 30% become recommendation targets)</span></label>
-      <div class="weight-sliders">
-        <div class="weight-row" data-key="tempo">
-          <label>Tempo / BPM</label>
-          <input type="range" min="0" max="100" value="50" />
-          <span class="weight-val">50%</span>
-        </div>
-        <div class="weight-row" data-key="energy">
-          <label>Energy</label>
-          <input type="range" min="0" max="100" value="50" />
-          <span class="weight-val">50%</span>
-        </div>
-        <div class="weight-row" data-key="valence">
-          <label>Mood / Valence</label>
-          <input type="range" min="0" max="100" value="50" />
-          <span class="weight-val">50%</span>
-        </div>
-        <div class="weight-row" data-key="danceability">
-          <label>Danceability</label>
-          <input type="range" min="0" max="100" value="50" />
-          <span class="weight-val">50%</span>
-        </div>
-        <div class="weight-row" data-key="acousticness">
-          <label>Acousticness</label>
-          <input type="range" min="0" max="100" value="50" />
-          <span class="weight-val">50%</span>
-        </div>
-        <div class="weight-row" data-key="instrumentalness">
-          <label>Instrumentalness</label>
-          <input type="range" min="0" max="100" value="50" />
-          <span class="weight-val">50%</span>
-        </div>
-      </div>
-    </div>
-
-    <div id="seed-track" class="seed-track hidden"></div>
-
-    <div id="drill-panel" class="drill-panel hidden">
-      <div class="drill-panel-header">
-        <h3>Drill Trace</h3>
-        <button type="button" id="drill-close-btn" class="drill-close-btn">Close</button>
-      </div>
-      <div id="drill-breadcrumbs" class="drill-breadcrumbs"></div>
-      <div id="drill-profile" class="drill-profile"></div>
-    </div>
-
-    <!-- Filter panel: shown after results load -->
-    <div id="filter-panel" class="filter-panel hidden">
-      <details open>
-        <summary>Filters</summary>
-
-        <div id="bpm-filter" class="bpm-filter hidden">
-          <label for="bpm-tolerance">BPM tolerance</label>
-          <div class="bpm-row">
-            <input type="range" id="bpm-tolerance" min="0" max="100" step="1" value="100" />
-            <span id="bpm-label">Any</span>
+        <div id="audio-weights" class="audio-weights hidden">
+          <label class="weights-heading">Similarity Weights <span class="hint">(dimensions above 30% become recommendation targets)</span></label>
+          <div class="weight-sliders">
+            <div class="weight-row" data-key="tempo">
+              <label>Tempo / BPM</label>
+              <input type="range" min="0" max="100" value="50" />
+              <span class="weight-val">50%</span>
+            </div>
+            <div class="weight-row" data-key="energy">
+              <label>Energy</label>
+              <input type="range" min="0" max="100" value="50" />
+              <span class="weight-val">50%</span>
+            </div>
+            <div class="weight-row" data-key="valence">
+              <label>Mood / Valence</label>
+              <input type="range" min="0" max="100" value="50" />
+              <span class="weight-val">50%</span>
+            </div>
+            <div class="weight-row" data-key="danceability">
+              <label>Danceability</label>
+              <input type="range" min="0" max="100" value="50" />
+              <span class="weight-val">50%</span>
+            </div>
+            <div class="weight-row" data-key="acousticness">
+              <label>Acousticness</label>
+              <input type="range" min="0" max="100" value="50" />
+              <span class="weight-val">50%</span>
+            </div>
+            <div class="weight-row" data-key="instrumentalness">
+              <label>Instrumentalness</label>
+              <input type="range" min="0" max="100" value="50" />
+              <span class="weight-val">50%</span>
+            </div>
           </div>
         </div>
 
-        <div id="tag-filter" class="tag-filter hidden">
-          <label>Tags <span class="hint">(click to filter)</span></label>
-          <div id="quick-filters" class="quick-filters"></div>
-          <div id="tag-sections" class="tag-sections"></div>
+        <div id="seed-track" class="seed-track hidden"></div>
+
+        <div id="drill-panel" class="drill-panel hidden">
+          <div class="drill-panel-header">
+            <h3>Drill Trace</h3>
+            <button type="button" id="drill-close-btn" class="drill-close-btn">Close</button>
+          </div>
+          <div id="drill-breadcrumbs" class="drill-breadcrumbs"></div>
+          <div id="drill-profile" class="drill-profile"></div>
         </div>
-      </details>
-    </div>
 
-    <div id="actions-bar" class="actions-bar hidden">
-      <button id="save-playlist-btn" class="action-btn" title="Save filtered results as a Spotify playlist">Save as Playlist</button>
-      <button id="add-queue-btn" class="action-btn" title="Add filtered results to your Spotify queue">Add to Queue</button>
-      <span id="action-status" class="action-status" aria-live="polite"></span>
-    </div>
+        <div id="actions-bar" class="actions-bar hidden">
+          <button id="save-playlist-btn" class="action-btn" title="Save filtered results as a Spotify playlist">Save as Playlist</button>
+          <button id="add-queue-btn" class="action-btn" title="Add filtered results to your Spotify queue">Add to Queue</button>
+          <span id="action-status" class="action-status" aria-live="polite"></span>
+        </div>
 
-    <section id="text-playlist-panel" class="external-queue-panel hidden" aria-live="polite">
-      <div class="external-queue-head">
-        <h3>Text Playlist Builder</h3>
-      </div>
-      <div class="external-queue-actions">
-        <button id="text-add-visible-btn" class="action-btn" type="button">Add Visible</button>
-        <button id="text-export-btn" class="action-btn" type="button">Export as Text</button>
-        <button id="text-create-spotify-btn" class="action-btn" type="button">Create Spotify Playlist</button>
-      </div>
-      <input id="text-playlist-name" type="text" placeholder="Playlist name" value="Cat-ID Text Playlist" />
-      <textarea id="text-playlist-lines" rows="8" placeholder="Artist — Track (one per line)"></textarea>
-      <div id="text-playlist-status" class="action-status"></div>
-    </section>
+        <div id="results" class="results"></div>
+        <button id="discover-more-btn" class="discover-more-btn hidden">Discover More</button>
+      </section>
+
+      <aside class="sidebar-column">
+        <section id="filter-panel" class="filter-panel hidden surface-card">
+          <details open>
+            <summary>Filters <span id="active-filter-count" class="hint"></span></summary>
+
+            <div id="bpm-filter" class="filter-group hidden">
+              <label for="bpm-tolerance">BPM tolerance</label>
+              <div class="bpm-row">
+                <input type="range" id="bpm-tolerance" min="0" max="100" step="1" value="100" />
+                <span id="bpm-label">Any</span>
+              </div>
+            </div>
+
+            <div class="filter-group">
+              <label for="popularity-min">Popularity</label>
+              <div class="bpm-row">
+                <input type="number" id="popularity-min" min="0" max="100" value="0" />
+                <input type="number" id="popularity-max" min="0" max="100" value="100" />
+              </div>
+            </div>
+
+            <div class="filter-group">
+              <label for="release-year-min">Release year</label>
+              <div class="bpm-row">
+                <input type="number" id="release-year-min" min="1900" max="2100" value="1900" />
+                <input type="number" id="release-year-max" min="1900" max="2100" value="2100" />
+              </div>
+            </div>
+
+            <div class="filter-group">
+              <label>Vocal / Instrumental</label>
+              <div class="toggle-row">
+                <label><input type="checkbox" id="filter-instrumental-only" /> Instrumental only</label>
+                <label><input type="checkbox" id="filter-vocal-only" /> Vocal only</label>
+              </div>
+            </div>
+
+            <div id="tag-filter" class="filter-group hidden">
+              <label>Mood & Tags <span class="hint">(multi-select)</span></label>
+              <div id="quick-filters" class="quick-filters"></div>
+              <div id="tag-sections" class="tag-sections"></div>
+            </div>
+
+            <details id="advanced-filters-wrap" class="advanced-filters-wrap">
+              <summary>Advanced Metadata Filters</summary>
+              <div id="advanced-filters" class="advanced-filters"></div>
+            </details>
+
+            <button id="reset-filters-btn" class="action-btn" type="button">Reset filters</button>
+          </details>
+        </section>
+
+        <section id="memory-board-panel" class="surface-card hidden" aria-live="polite">
+          <div class="section-head">
+            <h3>Memory Board (<span id="memory-board-count">0</span>)</h3>
+          </div>
+          <div class="section-actions">
+            <button id="board-add-visible-btn" class="action-btn" type="button">Add All Visible</button>
+            <button id="board-clear-btn" class="action-btn" type="button">Clear All</button>
+            <button id="board-copy-btn" class="action-btn" type="button">Copy as Text</button>
+          </div>
+          <div id="memory-board-list" class="external-queue-list"></div>
+          <div id="memory-board-status" class="action-status"></div>
+        </section>
+
+        <section id="playlist-panel" class="surface-card">
+          <div class="section-head">
+            <h3>Playlist Builder</h3>
+          </div>
+          <div class="section-actions playlist-actions">
+            <select id="board-playlist-target">
+              <option value="new">Create new playlist</option>
+              <option value="existing">Add to existing playlist</option>
+            </select>
+            <input id="board-playlist-name" type="text" placeholder="Playlist name" value="Cat-ID Memory Board" />
+            <select id="board-existing-playlist" class="hidden"></select>
+            <button id="board-create-playlist-btn" class="action-btn" type="button">Create Playlist</button>
+          </div>
+        </section>
+
+        <aside id="drill-side-panel" class="drill-side-panel hidden">
+          <div id="drill-side-content"></div>
+        </aside>
+      </aside>
+    </main>
 
     <section id="external-queue-panel" class="external-queue-panel hidden" aria-live="polite">
       <div class="external-queue-head">
@@ -172,13 +222,6 @@
       <div id="external-queue-list" class="external-queue-list"></div>
     </section>
 
-    <div class="results-layout">
-      <div id="results" class="results"></div>
-      <aside id="drill-side-panel" class="drill-side-panel hidden">
-        <div id="drill-side-content"></div>
-      </aside>
-    </div>
-    <button id="discover-more-btn" class="discover-more-btn hidden">Discover More</button>
     <div id="error" class="error hidden" role="alert"></div>
     <div id="loading" class="loading hidden" aria-live="polite">
       <div class="spinner"></div>

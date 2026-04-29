@@ -1,8 +1,12 @@
-"""Spotify OAuth Authorization Code flow for user-scoped actions (playlists, queue)."""
+"""Spotify OAuth PKCE flow for user-scoped actions (playlists, queue)."""
 
+import base64
+import hashlib
 import logging
+import secrets
 from urllib.parse import urlencode
 
+import httpx
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
@@ -14,7 +18,7 @@ from backend.config import (
 
 logger = logging.getLogger(__name__)
 
-SCOPES = "playlist-modify-public playlist-modify-private user-modify-playback-state"
+SCOPES = "playlist-modify-public playlist-modify-private playlist-read-private user-modify-playback-state user-read-private"
 
 
 def build_oauth_manager(cache_handler: spotipy.CacheHandler | None = None) -> SpotifyOAuth:
@@ -42,8 +46,40 @@ def get_authorize_url(state: str | None = None) -> str:
     return f"https://accounts.spotify.com/authorize?{urlencode(params)}"
 
 
-def exchange_code(code: str) -> dict:
+def build_pkce_pair() -> tuple[str, str]:
+    verifier = secrets.token_urlsafe(64)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    return verifier, challenge
+
+
+def get_authorize_url_pkce(state: str, code_challenge: str) -> str:
+    params = {
+        "client_id": SPOTIFY_CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": SPOTIFY_REDIRECT_URI,
+        "scope": SCOPES,
+        "state": state,
+        "code_challenge_method": "S256",
+        "code_challenge": code_challenge,
+    }
+    return f"https://accounts.spotify.com/authorize?{urlencode(params)}"
+
+
+def exchange_code(code: str, code_verifier: str | None = None) -> dict:
     """Exchange an authorization code for token info dict."""
+    if code_verifier:
+        payload = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": SPOTIFY_REDIRECT_URI,
+            "client_id": SPOTIFY_CLIENT_ID,
+            "code_verifier": code_verifier,
+        }
+        with httpx.Client(timeout=10) as client:
+            response = client.post("https://accounts.spotify.com/api/token", data=payload)
+            response.raise_for_status()
+            token_info = response.json()
+        return token_info
     oauth = build_oauth_manager()
     return oauth.get_access_token(code, as_dict=True, check_cache=False)
 

@@ -1,1541 +1,822 @@
 (() => {
-  const form = document.getElementById("search-form");
-  const urlInput = document.getElementById("track-url");
-  const searchBtn = document.getElementById("search-btn");
-  const seedEl = document.getElementById("seed-track");
-  const resultsEl = document.getElementById("results");
-  const errorEl = document.getElementById("error");
-  const loadingEl = document.getElementById("loading");
-  const filterPanel = document.getElementById("filter-panel");
-  const bpmFilter = document.getElementById("bpm-filter");
-  const bpmSlider = document.getElementById("bpm-tolerance");
-  const bpmLabel = document.getElementById("bpm-label");
-  const tagFilter = document.getElementById("tag-filter");
-  const tagSections = document.getElementById("tag-sections");
-  const quickFiltersEl = document.getElementById("quick-filters");
-  const actionsBar = document.getElementById("actions-bar");
-  const savePlaylistBtn = document.getElementById("save-playlist-btn");
-  const addQueueBtn = document.getElementById("add-queue-btn");
-  const actionStatus = document.getElementById("action-status");
-  const externalQueuePanel = document.getElementById("external-queue-panel");
-  const externalProviderPref = document.getElementById("external-provider-pref");
-  const externalOpenCurrentBtn = document.getElementById("external-open-current-btn");
-  const externalMarkPlayedBtn = document.getElementById("external-mark-played-btn");
-  const externalPrevBtn = document.getElementById("external-prev-btn");
-  const externalNextBtn = document.getElementById("external-next-btn");
-  const externalClearBtn = document.getElementById("external-clear-btn");
-  const exportQueueTextBtn = document.getElementById("export-queue-text-btn");
-  const externalQueueStatus = document.getElementById("external-queue-status");
-  const externalQueueList = document.getElementById("external-queue-list");
-  const spotifyLoginBtn = document.getElementById("spotify-login-btn");
-  const spotifyUserEl = document.getElementById("spotify-user");
-  const spotifyLogoutBtn = document.getElementById("spotify-logout-btn");
-  const reloadBtn = document.getElementById("reload-btn");
-  const textPlaylistPanel = document.getElementById("text-playlist-panel");
-  const textAddVisibleBtn = document.getElementById("text-add-visible-btn");
-  const textExportBtn = document.getElementById("text-export-btn");
-  const textCreateSpotifyBtn = document.getElementById("text-create-spotify-btn");
-  const textPlaylistNameInput = document.getElementById("text-playlist-name");
-  const textPlaylistLines = document.getElementById("text-playlist-lines");
-  const textPlaylistStatus = document.getElementById("text-playlist-status");
-  const audioWeightsPanel = document.getElementById("audio-weights");
-  const weightRows = audioWeightsPanel.querySelectorAll(".weight-row");
-  const modeBtns = document.querySelectorAll(".mode-btn");
-  const drillPanel = document.getElementById("drill-panel");
-  const drillBreadcrumbs = document.getElementById("drill-breadcrumbs");
-  const drillProfile = document.getElementById("drill-profile");
-  const drillCloseBtn = document.getElementById("drill-close-btn");
-  const drillSidePanel = document.getElementById("drill-side-panel");
-  const drillSideContent = document.getElementById("drill-side-content");
-
-  let currentAudio = null;
-  let spotifyConnected = false;
-  let currentMode = "audio";
-
-  let allTracks = [];
-  let seedTrack = null;
-  let seedTags = [];
-  let tagCategories = {};
-  let selectedTags = new Set();
-  let displayLimit = 50;
-  let approximated = false;
-  let seenTrackKeys = new Set();
-  let exhausted = false;
-  let softFiltering = false;
-  let traceHistory = [];
-  let visibleTracks = [];
-  let mappedCount = 0;
-  let unmappedCount = 0;
-  let mappingDegradedReason = null;
-  let mappingUsedUserToken = false;
-  let mappingSourceCounts = {};
-  let externalLinksDegradedReason = null;
-  let strictMappedOnly = false;
-  let activeRequestId = 0;
-  let activeController = null;
-  let isRequestInFlight = false;
-  let lastSeedKey = "";
-  let externalQueueAutoAdvanceTimer = null;
-  let selectedQueueProvider = "youtube_music";
-  let liveSearchTimer = null;
-  let lastAutoSearchQuery = "";
-
-  const EXTERNAL_QUEUE_KEY = "catid_external_queue_v1";
-  const EXTERNAL_PROVIDER_KEY = "catid_external_provider_pref";
-  const TEXT_PLAYLIST_LINES_KEY = "catid_text_playlist_lines_v1";
-  const EXTERNAL_AUTO_ADVANCE_MS = 10000;
-  const LIVE_SEARCH_DEBOUNCE_MS = 400;
-  const SPOTIFY_PROVIDER = "spotify";
-
-  const discoverMoreBtn = document.getElementById("discover-more-btn");
-
-  const CATEGORY_LABELS = {
-    mood: "Mood",
-    genre: "Style",
-    vocals_instrumentals: "Vocals / Instrumentation",
+  const byId = (id) => document.getElementById(id);
+  const dom = {
+    form: byId("search-form"),
+    urlInput: byId("track-url"),
+    limit: byId("limit"),
+    reloadBtn: byId("reload-btn"),
+    discoverMoreBtn: byId("discover-more-btn"),
+    results: byId("results"),
+    loading: byId("loading"),
+    error: byId("error"),
+    seedTrack: byId("seed-track"),
+    filterPanel: byId("filter-panel"),
+    quickFilters: byId("quick-filters"),
+    tagSections: byId("tag-sections"),
+    activeFilterCount: byId("active-filter-count"),
+    popularityMin: byId("popularity-min"),
+    popularityMax: byId("popularity-max"),
+    releaseYearMin: byId("release-year-min"),
+    releaseYearMax: byId("release-year-max"),
+    bpmFilter: byId("bpm-filter"),
+    bpmTolerance: byId("bpm-tolerance"),
+    bpmLabel: byId("bpm-label"),
+    instrumentalOnly: byId("filter-instrumental-only"),
+    vocalOnly: byId("filter-vocal-only"),
+    advancedFilters: byId("advanced-filters"),
+    resetFiltersBtn: byId("reset-filters-btn"),
+    loginBtn: byId("spotify-login-btn"),
+    logoutBtn: byId("spotify-logout-btn"),
+    spotifyUser: byId("spotify-user"),
+    addQueueBtn: byId("add-queue-btn"),
+    actionStatus: byId("action-status"),
+    actionsBar: byId("actions-bar"),
+    boardPanel: byId("memory-board-panel"),
+    boardCount: byId("memory-board-count"),
+    boardList: byId("memory-board-list"),
+    boardStatus: byId("memory-board-status"),
+    boardAddVisibleBtn: byId("board-add-visible-btn"),
+    boardClearBtn: byId("board-clear-btn"),
+    boardCopyBtn: byId("board-copy-btn"),
+    boardPlaylistTarget: byId("board-playlist-target"),
+    boardPlaylistName: byId("board-playlist-name"),
+    boardExistingPlaylist: byId("board-existing-playlist"),
+    boardCreatePlaylistBtn: byId("board-create-playlist-btn"),
+    drillPanel: byId("drill-panel"),
+    drillCloseBtn: byId("drill-close-btn"),
+    drillBreadcrumbs: byId("drill-breadcrumbs")
   };
 
-  const QUICK_FILTERS = [
-    { label: "Chill mood", tags: ["chill", "chillout", "relaxing", "calm", "ambient", "peaceful", "dreamy", "atmospheric"] },
-    { label: "More instrumental", tags: ["instrumental", "no vocal", "no vocals"] },
-    { label: "More vocal", tags: ["female vocal", "male vocal", "vocals", "vocal", "female vocals", "male vocals"] },
-  ];
-  const TAG_ALIASES = {
-    "female vocals": "female vocal",
-    "male vocals": "male vocal",
-    "no vocals": "no vocal",
-  };
-  const INSTRUMENTAL_TAGS = new Set(["instrumental", "no vocal"]);
-  const VOCAL_TAGS = new Set(["vocal", "vocals", "female vocal", "male vocal"]);
-
-  const AUDIO_DIMENSION_LABELS = {
-    tempo: "BPM",
-    energy: "Energy",
-    valence: "Valence",
-    danceability: "Dance",
-    acousticness: "Acoustic",
-    instrumentalness: "Instrumental",
+  const STORAGE_KEYS = {
+    board: "catid.memoryBoard.v1",
+    uriCache: "catid.uriCache.v1"
   };
 
-  function readJsonStorage(key, fallback) {
+  const CORE_ADVANCED_EXCLUDES = new Set([
+    "tempo", "bpm", "popularity", "release_year",
+    "instrumentalness", "energy", "danceability",
+    "valence", "acousticness"
+  ]);
+
+  const state = {
+    lastQueryUrl: "",
+    seed: null,
+    tracks: [],
+    breadcrumbs: [],
+    seenTrackKeys: new Set(),
+    spotifyConnected: false,
+    playlists: [],
+    board: loadJson(STORAGE_KEYS.board, []),
+    uriCache: loadJson(STORAGE_KEYS.uriCache, {}),
+    tagCategories: {},
+    filters: {
+      selectedTags: new Set(),
+      instrumentalOnly: false,
+      vocalOnly: false,
+      advanced: {}
+    },
+    advancedSchema: {}
+  };
+
+  function loadJson(key, fallback) {
     try {
       const raw = window.localStorage.getItem(key);
-      if (!raw) return fallback;
-      const parsed = JSON.parse(raw);
-      return parsed ?? fallback;
+      return raw ? JSON.parse(raw) : fallback;
     } catch (_) {
       return fallback;
     }
   }
 
-  function writeJsonStorage(key, value) {
-    try {
-      window.localStorage.setItem(key, JSON.stringify(value));
-    } catch (_) {
-      // ignore quota/serialization errors and keep runtime state only
-    }
+  function saveJson(key, value) {
+    window.localStorage.setItem(key, JSON.stringify(value));
   }
 
-  function getTextLines() {
-    const value = window.localStorage.getItem(TEXT_PLAYLIST_LINES_KEY) || "";
-    return value
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
+  function esc(value) {
+    const div = document.createElement("div");
+    div.textContent = String(value ?? "");
+    return div.innerHTML;
   }
-
-  function setTextLines(lines) {
-    const normalized = [...new Set(lines.map((line) => line.trim()).filter(Boolean))];
-    textPlaylistLines.value = normalized.join("\n");
-    window.localStorage.setItem(TEXT_PLAYLIST_LINES_KEY, textPlaylistLines.value);
-  }
-
-  function appendTrackToTextList(track) {
-    const artist = (track.artists || []).join(", ").trim();
-    const title = (track.name || "").trim();
-    if (!artist || !title) return;
-    const next = getTextLines();
-    next.push(`${artist} — ${title}`);
-    setTextLines(next);
-  }
-
-  function buildQueueItem(track) {
-    return {
-      id: `${trackKey(track)}::${Date.now()}::${Math.random().toString(36).slice(2, 8)}`,
-      track_key: trackKey(track),
-      title: track.name,
-      artist: (track.artists || []).join(", "),
-      links: track.external_links || {},
-      primary_provider: track.external_primary_provider || null,
-      album_art: track.album_art || null,
-      added_at: Date.now(),
-      position: 0,
-      last_opened_provider: null,
-    };
-  }
-
-  function chooseProviderUrl(item, preferredProvider) {
-    const links = item?.links || {};
-    const preferred = preferredProvider && links[preferredProvider] ? preferredProvider : null;
-    const primary = item?.primary_provider && links[item.primary_provider] ? item.primary_provider : null;
-    const fallbackOrder = [
-      "soundcloud",
-      "youtube_music",
-      "youtube",
-      "deezer",
-      "apple_music",
-      "tidal",
-    ];
-    const fallbackProvider =
-      fallbackOrder.find((providerKey) => Boolean(links[providerKey])) || Object.keys(links)[0] || null;
-    const provider = preferred || primary || fallbackProvider;
-    return {
-      provider,
-      url: provider ? links[provider] : null,
-    };
-  }
-
-  function syncProviderOptions() {
-    const previous = externalProviderPref.value || selectedQueueProvider || SPOTIFY_PROVIDER;
-    const options = [[SPOTIFY_PROVIDER, "Spotify"]];
-    externalProviderPref.innerHTML = options
-      .map(([value, label]) => `<option value="${value}">${label}</option>`)
-      .join("");
-
-    const allowed = new Set(options.map(([value]) => value));
-    const fallback = SPOTIFY_PROVIDER;
-    const next = allowed.has(previous) ? previous : (allowed.has(fallback) ? fallback : options[0][0]);
-    externalProviderPref.value = next;
-    selectedQueueProvider = next;
-  }
-
-  function isSpotifyProviderSelected() {
-    return selectedQueueProvider === SPOTIFY_PROVIDER;
-  }
-
-  const LocalQueueStore = {
-    getState() {
-      const state = readJsonStorage(EXTERNAL_QUEUE_KEY, { items: [], current_index: 0 });
-      if (!state || !Array.isArray(state.items)) return { items: [], current_index: 0 };
-      const idx = Number.isInteger(state.current_index) ? state.current_index : 0;
-      return {
-        items: state.items,
-        current_index: Math.max(0, Math.min(idx, Math.max(0, state.items.length - 1))),
-      };
-    },
-    saveState(state) {
-      writeJsonStorage(EXTERNAL_QUEUE_KEY, state);
-    },
-    enqueue(item) {
-      const state = this.getState();
-      state.items.push({ ...item, position: state.items.length });
-      this.saveState(state);
-      return state;
-    },
-    remove(id) {
-      const state = this.getState();
-      state.items = state.items.filter((item) => item.id !== id).map((item, idx) => ({ ...item, position: idx }));
-      if (state.current_index >= state.items.length) {
-        state.current_index = Math.max(0, state.items.length - 1);
-      }
-      this.saveState(state);
-      return state;
-    },
-    setCurrent(index) {
-      const state = this.getState();
-      state.current_index = Math.max(0, Math.min(index, Math.max(0, state.items.length - 1)));
-      this.saveState(state);
-      return state;
-    },
-    advance() {
-      const state = this.getState();
-      if (state.items.length === 0) return state;
-      state.current_index = Math.min(state.current_index + 1, state.items.length - 1);
-      this.saveState(state);
-      return state;
-    },
-    retreat() {
-      const state = this.getState();
-      if (state.items.length === 0) return state;
-      state.current_index = Math.max(state.current_index - 1, 0);
-      this.saveState(state);
-      return state;
-    },
-    clear() {
-      const state = { items: [], current_index: 0 };
-      this.saveState(state);
-      return state;
-    },
-    savePreference(provider) {
-      window.localStorage.setItem(EXTERNAL_PROVIDER_KEY, provider || "youtube_music");
-    },
-    loadPreference() {
-      return window.localStorage.getItem(EXTERNAL_PROVIDER_KEY) || "youtube_music";
-    },
-  };
-
-  // Future extension point for authenticated queue persistence.
-  const QueueStore = LocalQueueStore;
 
   function normalizeTag(tag) {
-    const normalized = String(tag || "").trim().toLowerCase().replace(/\s+/g, " ");
-    return TAG_ALIASES[normalized] || normalized;
+    return String(tag || "").trim().toLowerCase();
   }
 
-  function normalizedTagSet(tags) {
-    return new Set((tags || []).map(normalizeTag));
+  function trackKey(track) {
+    return `${(track.artists?.[0] || "").trim().toLowerCase()}::${(track.name || "").trim().toLowerCase()}`;
   }
 
-  function countTagOverlap(trackTags, selected) {
-    let overlap = 0;
-    for (const tag of selected) {
-      if (trackTags.has(tag)) overlap++;
-    }
-    return overlap;
+  function boardKey(item) {
+    return `${(item.artist || "").trim().toLowerCase()}::${(item.title || "").trim().toLowerCase()}`;
   }
-
-  function instrumentalPenalty(trackTags, selectedHasInstrumental, selectedHasVocal) {
-    if (!selectedHasInstrumental && !selectedHasVocal) return 1;
-    const trackHasInstrumental = [...trackTags].some((tag) => INSTRUMENTAL_TAGS.has(tag));
-    const trackHasVocal = [...trackTags].some((tag) => VOCAL_TAGS.has(tag));
-    if (selectedHasInstrumental && trackHasVocal && !trackHasInstrumental) return 0.3;
-    if (selectedHasInstrumental && trackHasVocal && trackHasInstrumental) return 0.7;
-    if (selectedHasVocal && trackHasInstrumental && !trackHasVocal) return 0.5;
-    return 1;
-  }
-
-  // --- Mode toggle ---
-  modeBtns.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const mode = btn.dataset.mode;
-      if (mode === currentMode) return;
-      currentMode = mode;
-      modeBtns.forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
-      audioWeightsPanel.classList.toggle("hidden", mode !== "audio");
-      filterPanel.classList.add("hidden");
-      traceHistory = [];
-      renderDrillPanel();
-    });
-  });
-  audioWeightsPanel.classList.toggle("hidden", currentMode !== "audio");
-
-  // --- Weight sliders ---
-  weightRows.forEach((row) => {
-    const slider = row.querySelector("input[type=range]");
-    const valSpan = row.querySelector(".weight-val");
-    slider.addEventListener("input", () => {
-      valSpan.textContent = slider.value + "%";
-    });
-  });
 
   function getWeights() {
-    const weights = {};
-    weightRows.forEach((row) => {
+    const weights = {
+      tempo: 0.5,
+      energy: 0.5,
+      valence: 0.5,
+      danceability: 0.5,
+      acousticness: 0.5,
+      instrumentalness: 0.5
+    };
+    document.querySelectorAll(".weight-row").forEach((row) => {
       const key = row.dataset.key;
-      const slider = row.querySelector("input[type=range]");
-      weights[key] = parseInt(slider.value, 10) / 100;
+      const input = row.querySelector("input[type='range']");
+      const label = row.querySelector(".weight-val");
+      const value = Number(input?.value || "50");
+      if (key && Object.prototype.hasOwnProperty.call(weights, key)) {
+        weights[key] = Math.max(0, Math.min(1, value / 100));
+      }
+      if (label) label.textContent = `${value}%`;
     });
     return weights;
   }
 
-  // --- Form ---
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    if (liveSearchTimer) {
-      window.clearTimeout(liveSearchTimer);
-      liveSearchTimer = null;
-    }
-    await search();
-  });
-  reloadBtn.addEventListener("click", async () => {
-    if (traceHistory.length > 0) {
-      const pivot = traceHistory[traceHistory.length - 1];
-      await runDrillSearch(pivot.track, { keepTrace: true });
-      return;
-    }
-    await search();
-  });
-
-  function isLikelySpotifyTrackInput(value) {
-    const trimmed = (value || "").trim();
-    if (!trimmed) return false;
-    if (trimmed.includes("open.spotify.com/track/")) return true;
-    if (trimmed.startsWith("spotify:track:")) return true;
-    return /^[a-zA-Z0-9]{22}$/.test(trimmed);
-  }
-
-  urlInput.addEventListener("input", () => {
-    if (liveSearchTimer) {
-      window.clearTimeout(liveSearchTimer);
-    }
-    const candidate = urlInput.value.trim();
-    if (!isLikelySpotifyTrackInput(candidate)) {
-      return;
-    }
-    liveSearchTimer = window.setTimeout(async () => {
-      if (!isLikelySpotifyTrackInput(candidate)) return;
-      if (candidate === lastAutoSearchQuery && allTracks.length > 0) return;
-      lastAutoSearchQuery = candidate;
-      await search({ urlOverride: candidate });
-    }, LIVE_SEARCH_DEBOUNCE_MS);
-  });
-
-  bpmSlider.addEventListener("input", () => {
-    updateBpmLabel();
-    softFiltering = false;
-    renderFiltered();
-  });
-
-  discoverMoreBtn.addEventListener("click", async () => {
-    stopAudio();
-    discoverMoreBtn.disabled = true;
-    discoverMoreBtn.textContent = "Searching\u2026";
-    try {
-      let data;
-      const url = urlInput.value.trim();
-      const excludeList = [...seenTrackKeys];
-      const request = beginRequest();
-      if (currentMode === "audio") {
-        data = await fetchAudioSimilar(url, excludeList, request);
-      } else {
-        data = await fetchLastfmSimilar(url, excludeList, request);
-      }
-      if (!isCurrentRequest(request.requestId)) return;
-      if (data.similar_tracks.length === 0) {
-        exhausted = true;
-        renderFiltered();
-        return;
-      }
-      allTracks = mergeTracksByKey(allTracks, data.similar_tracks);
-      seedTags = data.seed_tags || seedTags;
-      tagCategories = data.tag_categories || tagCategories;
-      approximated = data.approximated || false;
-      mappedCount = data.mapped_count || 0;
-      unmappedCount = data.unmapped_count || 0;
-      mappingDegradedReason = data.mapping_degraded_reason || null;
-      externalLinksDegradedReason = data.external_links_degraded_reason || null;
-      mappingUsedUserToken = data.mapping_used_user_token === true;
-      mappingSourceCounts = data.mapping_source_counts || {};
-      strictMappedOnly = data.strict_mapped_only === true;
-      addToSeen(allTracks);
-      softFiltering = false;
-      buildFilters();
-      if (rankTracks().length === 0 && allTracks.length > 0) {
-        softFiltering = true;
-      }
-      renderFiltered();
-      updateActionsBar();
-    } catch (err) {
-      if (err.name !== "AbortError") {
-        errorEl.textContent = err.message;
-        errorEl.classList.remove("hidden");
-      }
-    } finally {
-      endRequest();
-      discoverMoreBtn.disabled = false;
-      discoverMoreBtn.textContent = "Discover More";
-      updateActionsBar();
-    }
-  });
-
-  drillCloseBtn.addEventListener("click", () => {
-    traceHistory = [];
-    renderDrillPanel();
-  });
-
-  function updateBpmLabel() {
-    const val = parseInt(bpmSlider.value, 10);
-    if (val >= 100) {
-      bpmLabel.textContent = "Any";
-    } else if (val === 0) {
-      bpmLabel.textContent = "Exact";
-    } else {
-      bpmLabel.textContent = "\u00b1" + val + "%";
-    }
-  }
-
-  function trackKey(t) {
-    return `${(t.artists || [])[0] || ""}::${t.name}`.toLowerCase();
-  }
-
-  function addToSeen(tracks) {
-    for (const t of tracks) seenTrackKeys.add(trackKey(t));
-  }
-
-  function averageFeatures(entries) {
-    const keys = ["tempo", "energy", "valence", "danceability", "acousticness", "instrumentalness"];
-    const sums = Object.fromEntries(keys.map((k) => [k, 0]));
-    const counts = Object.fromEntries(keys.map((k) => [k, 0]));
-    for (const entry of entries) {
-      const af = entry.audioFeatures || {};
-      for (const key of keys) {
-        const val = af[key];
-        if (typeof val === "number") {
-          sums[key] += val;
-          counts[key] += 1;
-        }
-      }
-      if (typeof entry.bpm === "number") {
-        sums.tempo += entry.bpm;
-        counts.tempo += 1;
-      }
-    }
-    const out = {};
-    for (const key of keys) {
-      out[key] = counts[key] > 0 ? sums[key] / counts[key] : null;
-    }
-    return out;
-  }
-
-  function intersectTags(entries) {
-    if (!entries.length) return [];
-    let inter = new Set(entries[0].tags || []);
-    for (let i = 1; i < entries.length; i++) {
-      const s = new Set(entries[i].tags || []);
-      inter = new Set([...inter].filter((t) => s.has(t)));
-    }
-    return [...inter];
-  }
-
-  function setWeightSlidersFromProfile(avg) {
-    weightRows.forEach((row) => {
-      const key = row.dataset.key;
-      if (key === "tempo") return;
-      const val = avg[key];
-      if (typeof val !== "number") return;
-      const slider = row.querySelector("input[type=range]");
-      const pct = Math.max(0, Math.min(100, Math.round(val * 100)));
-      slider.value = String(pct);
-      row.querySelector(".weight-val").textContent = `${pct}%`;
-    });
-  }
-
-  function renderDrillPanel() {
-    if (!traceHistory.length) {
-      drillBreadcrumbs.innerHTML = "";
-      drillProfile.textContent = "Select a result track using Drill to start narrowing.";
-      drillSideContent.innerHTML = "";
-      drillPanel.classList.add("hidden");
-      drillSidePanel.classList.add("hidden");
-      return;
-    }
-    drillPanel.classList.remove("hidden");
-    drillSidePanel.classList.remove("hidden");
-    const avg = averageFeatures(traceHistory);
-    const tags = intersectTags(traceHistory);
-
-    drillBreadcrumbs.innerHTML = traceHistory
-      .map((t, i) => `<button class="crumb-btn ${i === traceHistory.length - 1 ? "active" : ""}" data-crumb="${i}">${esc(t.track.name)}</button><button class="crumb-btn" data-remove-crumb="${i}" title="Remove step">×</button>`)
-      .join("");
-    drillProfile.innerHTML = `
-      <div><strong>Narrowed Tags:</strong> ${tags.length ? tags.map((t) => esc(t)).join(", ") : "None"}</div>
-      <div><strong>Avg Features:</strong>
-        Energy ${fmtPct(avg.energy)} | Valence ${fmtPct(avg.valence)} | Dance ${fmtPct(avg.danceability)} | Acoustic ${fmtPct(avg.acousticness)} | Instrumental ${fmtPct(avg.instrumentalness)} | BPM ${fmtTempo(avg.tempo)}
-      </div>
-    `;
-    drillSideContent.innerHTML = `
-      <div class="drill-profile">${drillProfile.innerHTML}</div>
-      <div class="tag-sections">
-        ${traceHistory.map((entry, idx) => `
-          <div class="tag-section">
-            <label class="tag-section-label">Step ${idx + 1}</label>
-            <div class="track-card-tags">
-              <span class="track-tag">${esc(entry.track.name)}</span>
-            </div>
-          </div>
-        `).join("")}
-      </div>
-    `;
-    drillBreadcrumbs.querySelectorAll(".crumb-btn").forEach((btn) => {
-      if (btn.dataset.crumb == null) return;
-      btn.addEventListener("click", async () => {
-        const idx = parseInt(btn.dataset.crumb, 10);
-        traceHistory = traceHistory.slice(0, idx + 1);
-        await runDrillSearch(traceHistory[idx].track);
-      });
-    });
-    drillBreadcrumbs.querySelectorAll("[data-remove-crumb]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const idx = parseInt(btn.dataset.removeCrumb, 10);
-        traceHistory = traceHistory.slice(0, idx);
-        if (traceHistory.length === 0) {
-          await search();
-          return;
-        }
-        const pivot = traceHistory[traceHistory.length - 1];
-        await runDrillSearch(pivot.track);
-      });
-    });
-  }
-
-  function fmtPct(v) {
-    return typeof v === "number" ? `${Math.round(v * 100)}%` : "-";
-  }
-  function fmtTempo(v) {
-    return typeof v === "number" ? `${Math.round(v)}` : "-";
-  }
-
-  async function runDrillSearch(track, options = {}) {
-    const { keepTrace = false } = options;
-    if (!track || !track.spotify_url) return;
-    const avg = averageFeatures(traceHistory);
-    const interTags = intersectTags(traceHistory);
-    selectedTags = new Set(interTags);
-    setWeightSlidersFromProfile(avg);
-
-    const request = beginRequest();
-    try {
-      let data;
-      if (currentMode === "audio") {
-        data = await fetchAudioSimilar(track.spotify_url, [], request);
-      } else {
-        data = await fetchLastfmSimilar(track.spotify_url, [], request);
-      }
-      if (!isCurrentRequest(request.requestId)) return;
-      seedTrack = data.seed_track;
-      allTracks = data.similar_tracks;
-      seedTags = data.seed_tags || [];
-      tagCategories = data.tag_categories || {};
-      approximated = data.approximated || false;
-      mappedCount = data.mapped_count || 0;
-      unmappedCount = data.unmapped_count || 0;
-      mappingDegradedReason = data.mapping_degraded_reason || null;
-      externalLinksDegradedReason = data.external_links_degraded_reason || null;
-      mappingUsedUserToken = data.mapping_used_user_token === true;
-      mappingSourceCounts = data.mapping_source_counts || {};
-      strictMappedOnly = data.strict_mapped_only === true;
-      addToSeen(allTracks);
-      renderSeed(seedTrack);
-      buildFilters();
-      renderFiltered();
-      updateActionsBar();
-      if (!keepTrace) {
-        traceHistory = traceHistory.slice();
-      }
-      renderDrillPanel();
-    } catch (err) {
-      if (err.name !== "AbortError") {
-        errorEl.textContent = err.message || "Drill search failed.";
-        errorEl.classList.remove("hidden");
-      }
-    } finally {
-      endRequest();
-      updateActionsBar();
-    }
-  }
-
-  function currentRequestLimit(excludeCount = 0) {
-    const poolLimit = Math.max(displayLimit * 2, 25);
-    const base = Math.min(poolLimit, 80);
-    if (excludeCount > 0) {
-      return Math.min(base + 20, 100);
-    }
-    return base;
-  }
-
-  async function search(options = {}) {
-    const { preserveTrace = false, urlOverride = null } = options;
-    const url = urlInput.value.trim();
-    const effectiveUrl = urlOverride || url;
-    if (!effectiveUrl) return;
-    lastAutoSearchQuery = effectiveUrl;
-    displayLimit = parseInt(document.getElementById("limit").value, 10);
-
-    const request = beginRequest();
-    stopAudio();
-    seedEl.classList.add("hidden");
-    filterPanel.classList.add("hidden");
-    discoverMoreBtn.classList.add("hidden");
-    resultsEl.innerHTML = "";
-    errorEl.classList.add("hidden");
-    loadingEl.classList.remove("hidden");
-    searchBtn.disabled = true;
-    allTracks = [];
-    seedTrack = null;
-    seedTags = [];
-    mappedCount = 0;
-    unmappedCount = 0;
-    mappingDegradedReason = null;
-    externalLinksDegradedReason = null;
-    mappingUsedUserToken = false;
-    mappingSourceCounts = {};
-    strictMappedOnly = false;
-    selectedTags.clear();
-    seenTrackKeys.clear();
-    exhausted = false;
-    softFiltering = false;
-    if (!preserveTrace) traceHistory = [];
-    updateActionsBar();
-
-    try {
-      let data;
-      if (currentMode === "audio") {
-        data = await fetchAudioSimilar(effectiveUrl, [], request);
-      } else {
-        data = await fetchLastfmSimilar(effectiveUrl, [], request);
-      }
-      if (!isCurrentRequest(request.requestId)) return;
-
-      seedTrack = data.seed_track;
-      allTracks = data.similar_tracks;
-      seedTags = data.seed_tags || [];
-      tagCategories = data.tag_categories || {};
-      approximated = data.approximated || false;
-      mappedCount = data.mapped_count || 0;
-      unmappedCount = data.unmapped_count || 0;
-      mappingDegradedReason = data.mapping_degraded_reason || null;
-      externalLinksDegradedReason = data.external_links_degraded_reason || null;
-      mappingUsedUserToken = data.mapping_used_user_token === true;
-      mappingSourceCounts = data.mapping_source_counts || {};
-      strictMappedOnly = data.strict_mapped_only === true;
-      addToSeen(allTracks);
-
-      renderSeed(seedTrack);
-      buildFilters();
-      renderFiltered();
-      updateActionsBar();
-      renderDrillPanel();
-    } catch (err) {
-      if (err.name !== "AbortError") {
-        errorEl.textContent = err.message;
-        errorEl.classList.remove("hidden");
-      }
-    } finally {
-      endRequest();
-      loadingEl.classList.add("hidden");
-      searchBtn.disabled = false;
-      updateActionsBar();
-    }
-  }
-
-  function beginRequest() {
-    if (activeController) activeController.abort();
-    activeRequestId += 1;
-    activeController = new AbortController();
-    isRequestInFlight = true;
-    return { requestId: activeRequestId, signal: activeController.signal };
-  }
-
-  function isCurrentRequest(requestId) {
-    return requestId === activeRequestId;
-  }
-
-  function endRequest() {
-    isRequestInFlight = false;
-  }
-
-  async function parseErrorPayload(resp) {
-    const maybeJson = await resp.json().catch(() => null);
-    if (maybeJson) return maybeJson;
-    const text = await resp.text().catch(() => "");
-    return { detail: text || `Request failed (${resp.status})` };
-  }
-
-  async function fetchLastfmSimilar(url, exclude = [], request = null) {
-    const limit = currentRequestLimit(exclude.length);
-    const resp = await fetch("/api/similar", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        url,
-        limit,
-        exclude,
-        strict_mapped_only: false,
-        use_metadata_fallback: true,
-      }),
-      signal: request?.signal,
-    });
-    if (!resp.ok) {
-      const data = await parseErrorPayload(resp);
-      throw new Error(data.detail || `Request failed (${resp.status})`);
-    }
-    return resp.json();
-  }
-
-  async function fetchAudioSimilar(url, exclude = [], request = null) {
-    const limit = currentRequestLimit(exclude.length);
-    const resp = await fetch("/api/similar/audio", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        url,
-        limit,
-        weights: getWeights(),
-        exclude,
-        strict_mapped_only: false,
-        use_metadata_fallback: true,
-      }),
-      signal: request?.signal,
-    });
-    if (!resp.ok) {
-      const data = await parseErrorPayload(resp);
-      throw new Error(data.detail || `Request failed (${resp.status})`);
-    }
-    return resp.json();
-  }
-
-  // --- Tag filter chips ---
-  function addChipListeners(chip, tag) {
-    chip.addEventListener("click", () => {
-      const normalized = normalizeTag(tag);
-      if (selectedTags.has(normalized)) {
-        selectedTags.delete(normalized);
-        chip.classList.remove("active");
-      } else {
-        selectedTags.add(normalized);
-        chip.classList.add("active");
-      }
-      softFiltering = false;
-      renderFiltered();
-    });
-  }
-
-  function buildFilters() {
-    const tagCounts = {};
-    for (const tag of seedTags) {
-      const normalized = normalizeTag(tag);
-      tagCounts[normalized] = (tagCounts[normalized] || 0) + 5;
-    }
-    for (const t of allTracks) {
-      for (const tag of t.tags || []) {
-        const normalized = normalizeTag(tag);
-        tagCounts[normalized] = (tagCounts[normalized] || 0) + 1;
-      }
-    }
-
-    const allPoolTags = Object.keys(tagCounts);
-    const top30 = Object.entries(tagCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 30)
-      .map(([tag]) => tag);
-
-    const sortedTags = [...new Set([...top30, ...selectedTags].filter((t) => t in tagCounts))];
-
-    const seedKey = seedTrack ? trackKey(seedTrack) : "";
-    if (seedTrack && seedTrack.bpm) {
-      bpmFilter.classList.remove("hidden");
-      if (seedKey !== lastSeedKey) {
-        bpmSlider.value = 100;
-      }
-      updateBpmLabel();
-    } else {
-      bpmFilter.classList.add("hidden");
-    }
-    lastSeedKey = seedKey;
-
-    if (sortedTags.length > 0) {
-      tagFilter.classList.remove("hidden");
-
-      quickFiltersEl.innerHTML = "";
-      for (const preset of QUICK_FILTERS) {
-        const matchingTags = allPoolTags.filter((st) => {
-          const normalizedTag = normalizeTag(st);
-          return preset.tags.some((pt) => normalizeTag(pt) === normalizedTag);
-        });
-        if (matchingTags.length === 0) continue;
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "quick-filter-btn";
-        btn.textContent = preset.label;
-        btn.addEventListener("click", () => {
-          matchingTags.forEach((t) => selectedTags.add(normalizeTag(t)));
-          buildFilters();
-          renderFiltered();
-        });
-        quickFiltersEl.appendChild(btn);
-      }
-
-      const byCategory = { mood: [], genre: [], vocals_instrumentals: [], other: [] };
-      for (const tag of sortedTags) {
-        const cat = tagCategories[tag] || "genre";
-        (byCategory[cat] || byCategory.other).push(tag);
-      }
-
-      const categoryOrder = ["mood", "vocals_instrumentals", "genre", "other"];
-      tagSections.innerHTML = "";
-      for (const catKey of categoryOrder) {
-        const tagsInCat = byCategory[catKey];
-        if (tagsInCat.length === 0) continue;
-        const label = CATEGORY_LABELS[catKey] || "Other";
-        const section = document.createElement("div");
-        section.className = "tag-section";
-        section.innerHTML = `<label class="tag-section-label">${esc(label)}</label>`;
-        const chipsWrap = document.createElement("div");
-        chipsWrap.className = "tag-chips";
-        for (const tag of tagsInCat) {
-          const chip = document.createElement("button");
-          chip.type = "button";
-          chip.className = "tag-chip";
-          chip.textContent = tag;
-          if (selectedTags.has(normalizeTag(tag))) chip.classList.add("active");
-          addChipListeners(chip, tag);
-          chipsWrap.appendChild(chip);
-        }
-        section.appendChild(chipsWrap);
-        tagSections.appendChild(section);
-      }
-    } else {
-      tagFilter.classList.add("hidden");
-    }
-
-    filterPanel.classList.remove("hidden");
-  }
-
-  // --- Ranking ---
-  function rankTracks() {
-    const bpmTol = parseInt(bpmSlider.value, 10);
-    const hasBpmFilter = !softFiltering && seedTrack && seedTrack.bpm && bpmTol < 100;
-    const hasTagFilter = selectedTags.size > 0;
-    const selectedHasInstrumental = [...selectedTags].some((tag) => INSTRUMENTAL_TAGS.has(tag));
-    const selectedHasVocal = [...selectedTags].some((tag) => VOCAL_TAGS.has(tag));
-
-    return allTracks
-      .map((t) => {
-        let score = t.match_score || 0;
-
-        if (hasBpmFilter && t.bpm) {
-          const pctDiff = (Math.abs(t.bpm - seedTrack.bpm) / seedTrack.bpm) * 100;
-          if (bpmTol === 0) {
-            score *= pctDiff <= 2 ? 1.0 : 0;
-          } else if (pctDiff > bpmTol) {
-            score = 0;
-          } else {
-            score *= 1 - (pctDiff / bpmTol) * 0.4;
-          }
-        }
-
-        if (hasTagFilter) {
-          const trackTags = normalizedTagSet(t.tags || []);
-          const overlap = countTagOverlap(trackTags, selectedTags);
-          if (overlap === 0) {
-            score *= softFiltering ? 0.5 : 0;
-          } else {
-            score *= overlap / selectedTags.size;
-          }
-          score *= instrumentalPenalty(trackTags, selectedHasInstrumental, selectedHasVocal);
-        }
-
-        return { ...t, _score: score };
-      })
-      .filter((t) => {
-        if (!hasBpmFilter && !hasTagFilter) {
-          return true;
-        }
-        return t._score > 0;
-      })
-      .sort((a, b) => b._score - a._score);
-  }
-
-  function renderFiltered() {
-    const ranked = rankTracks();
-    const shown = ranked.slice(0, displayLimit);
-    renderResults(shown, ranked.length);
-    discoverMoreBtn.classList.toggle("hidden", shown.length === 0 || exhausted);
-  }
-
-  // --- Badges ---
-  function matchBadge(score) {
-    if (score == null) return "";
-    const pct = Math.round(score * 100);
-    return `<span class="match-badge">${pct}% match</span>`;
-  }
-
-  function bpmBadge(bpm) {
-    if (!bpm) return "";
-    return `<span class="bpm-badge">${Math.round(bpm)} BPM</span>`;
-  }
-
-  function audioFeatureBadges(af) {
-    if (!af) return "";
-    const badges = [];
-    for (const [key, label] of Object.entries(AUDIO_DIMENSION_LABELS)) {
-      const val = af[key];
-      if (val == null) continue;
-      const display = key === "tempo" ? Math.round(val) : Math.round(val * 100) + "%";
-      badges.push(`<span class="af-badge" title="${label}">${label} ${display}</span>`);
-    }
-    return badges.join("");
-  }
-
-  const SPOTIFY_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>`;
-
-  function extractSpotifyTrackId(value) {
-    if (!value || typeof value !== "string") return null;
-    if (value.startsWith("spotify:track:")) return value.split(":")[2] || null;
-    const match = value.match(/spotify\.com\/track\/([a-zA-Z0-9]+)/);
-    return match ? match[1] : null;
-  }
-
-  function getSpotifyTargets(spotifyUrl, spotifyId) {
-    const trackId = spotifyId || extractSpotifyTrackId(spotifyUrl);
-    if (!trackId) return { appUrl: spotifyUrl || "", webUrl: spotifyUrl || "" };
+  function getCoreFilterValues() {
+    const popMin = Number(dom.popularityMin?.value ?? 0);
+    const popMax = Number(dom.popularityMax?.value ?? 100);
+    const yearMin = Number(dom.releaseYearMin?.value ?? 1900);
+    const yearMax = Number(dom.releaseYearMax?.value ?? 2100);
     return {
-      appUrl: `spotify:track:${trackId}`,
-      webUrl: `https://open.spotify.com/track/${trackId}`,
+      popMin: Number.isFinite(popMin) ? popMin : 0,
+      popMax: Number.isFinite(popMax) ? popMax : 100,
+      yearMin: Number.isFinite(yearMin) ? yearMin : 1900,
+      yearMax: Number.isFinite(yearMax) ? yearMax : 2100,
+      bpmTolerancePct: Number(dom.bpmTolerance?.value ?? 100),
+      instrumentalOnly: Boolean(dom.instrumentalOnly?.checked),
+      vocalOnly: Boolean(dom.vocalOnly?.checked)
     };
   }
 
-  function renderSpotifyLink(label, spotifyUrl, spotifyId) {
-    const { appUrl, webUrl } = getSpotifyTargets(spotifyUrl, spotifyId);
-    if (!appUrl && !webUrl) return esc(label);
-    return `<a class="spotify-open-link" href="${appUrl || webUrl}" data-web-url="${webUrl}" rel="noopener">${esc(label)}</a>`;
+  function getBackendFiltersPayload() {
+    const core = getCoreFilterValues();
+    const payload = {
+      bpm_min: null,
+      bpm_max: null,
+      popularity_min: core.popMin,
+      popularity_max: core.popMax,
+      release_year_min: core.yearMin,
+      release_year_max: core.yearMax,
+      tags_any: Array.from(state.filters.selectedTags),
+      require_instrumental: core.instrumentalOnly && !core.vocalOnly ? true : (core.vocalOnly && !core.instrumentalOnly ? false : null)
+    };
+    if (state.seed?.bpm != null && core.bpmTolerancePct < 100) {
+      const tolerance = (state.seed.bpm * core.bpmTolerancePct) / 100;
+      payload.bpm_min = Math.max(0, state.seed.bpm - tolerance);
+      payload.bpm_max = state.seed.bpm + tolerance;
+    }
+    return payload;
   }
 
-  function spotifyBtn(url, spotifyId) {
-    const { appUrl, webUrl } = getSpotifyTargets(url, spotifyId);
-    if (!appUrl && !webUrl) return "";
-    return `<a class="spotify-btn spotify-open-link" href="${appUrl || webUrl}" data-web-url="${webUrl}" rel="noopener" title="Open in Spotify">${SPOTIFY_ICON}</a>`;
+  function activeFilterCount() {
+    const core = getCoreFilterValues();
+    let count = 0;
+    if (core.popMin > 0 || core.popMax < 100) count += 1;
+    if (core.yearMin > 1900 || core.yearMax < 2100) count += 1;
+    if (core.bpmTolerancePct < 100) count += 1;
+    if (state.filters.selectedTags.size > 0) count += 1;
+    if (core.instrumentalOnly || core.vocalOnly) count += 1;
+    Object.values(state.filters.advanced).forEach((value) => {
+      if (value == null) return;
+      if (typeof value === "object" && ("min" in value || "max" in value)) {
+        if (value.min != null || value.max != null) count += 1;
+      } else if (value !== "") {
+        count += 1;
+      }
+    });
+    return count;
   }
 
-  function bindSpotifyOpenLinks(container) {
-    container.querySelectorAll(".spotify-open-link").forEach((link) => {
-      link.addEventListener("click", (event) => {
-        const webUrl = link.dataset.webUrl;
-        if (!webUrl || link.href.startsWith("http")) return;
-        event.preventDefault();
+  function renderActiveFilterCount() {
+    const count = activeFilterCount();
+    dom.activeFilterCount.textContent = count > 0 ? `(${count} active)` : "";
+  }
 
-        let appOpened = false;
-        const markOpened = () => {
-          appOpened = true;
-          window.removeEventListener("blur", markOpened);
-          document.removeEventListener("visibilitychange", onVisibility);
-        };
-        const onVisibility = () => {
-          if (document.hidden) markOpened();
-        };
+  function renderSeed() {
+    if (!state.seed) {
+      dom.seedTrack.classList.add("hidden");
+      return;
+    }
+    const artists = (state.seed.artists || []).join(", ");
+    const bpm = state.seed.bpm != null ? ` · ${Math.round(state.seed.bpm)} BPM` : "";
+    dom.seedTrack.innerHTML = `<strong>Seed:</strong> ${esc(artists)} - ${esc(state.seed.name || "")}${esc(bpm)}`;
+    dom.seedTrack.classList.remove("hidden");
+  }
 
-        window.addEventListener("blur", markOpened);
-        document.addEventListener("visibilitychange", onVisibility);
-        window.location.href = link.getAttribute("href");
-        window.setTimeout(() => {
-          if (!appOpened) window.open(webUrl, "_blank", "noopener");
-          markOpened();
-        }, 900);
+  function renderBreadcrumbs() {
+    const hasTrail = state.breadcrumbs.length > 0;
+    dom.drillPanel.classList.toggle("hidden", !hasTrail);
+    if (!hasTrail) {
+      dom.drillBreadcrumbs.innerHTML = "";
+      return;
+    }
+    dom.drillBreadcrumbs.innerHTML = state.breadcrumbs
+      .map((crumb, idx) => `<button type="button" class="crumb-btn" data-crumb-index="${idx}">${esc(crumb.label)}</button>`)
+      .join(" <span>→</span> ");
+  }
+
+  function renderTagFilters() {
+    const tagsByCategory = {};
+    const uncategorized = new Set();
+    const all = new Set();
+    state.tracks.forEach((track) => {
+      (track.tags || []).forEach((tagRaw) => {
+        const tag = normalizeTag(tagRaw);
+        if (!tag) return;
+        all.add(tag);
+        const category = state.tagCategories[tag];
+        if (!category) {
+          uncategorized.add(tag);
+          return;
+        }
+        if (!tagsByCategory[category]) tagsByCategory[category] = new Set();
+        tagsByCategory[category].add(tag);
       });
+    });
+    const allTags = Array.from(all).sort();
+    dom.quickFilters.innerHTML = allTags
+      .slice(0, 20)
+      .map((tag) => `<button type="button" class="tag-chip ${state.filters.selectedTags.has(tag) ? "active" : ""}" data-tag="${esc(tag)}">${esc(tag)}</button>`)
+      .join("");
+    const sections = Object.entries(tagsByCategory)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([category, values]) => {
+        const chips = Array.from(values).sort().map((tag) => `<button type="button" class="tag-chip ${state.filters.selectedTags.has(tag) ? "active" : ""}" data-tag="${esc(tag)}">${esc(tag)}</button>`).join("");
+        return `<div class="tag-section"><div class="tag-section-label">${esc(category)}</div><div class="tag-chips">${chips}</div></div>`;
+      });
+    if (uncategorized.size > 0) {
+      const chips = Array.from(uncategorized).sort().map((tag) => `<button type="button" class="tag-chip ${state.filters.selectedTags.has(tag) ? "active" : ""}" data-tag="${esc(tag)}">${esc(tag)}</button>`).join("");
+      sections.push(`<div class="tag-section"><div class="tag-section-label">other</div><div class="tag-chips">${chips}</div></div>`);
+    }
+    dom.tagSections.innerHTML = sections.join("");
+    byId("tag-filter")?.classList.toggle("hidden", allTags.length === 0);
+  }
+
+  function numericValue(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  }
+
+  function readTrackMetric(track, key) {
+    if (key === "bpm" || key === "tempo") return numericValue(track.bpm) ?? numericValue(track.analysis_metrics?.tempo) ?? numericValue(track.audio_features?.tempo);
+    if (Object.prototype.hasOwnProperty.call(track, key)) return track[key];
+    if (track.audio_features && Object.prototype.hasOwnProperty.call(track.audio_features, key)) return track.audio_features[key];
+    if (track.analysis_metrics && Object.prototype.hasOwnProperty.call(track.analysis_metrics, key)) return track.analysis_metrics[key];
+    return null;
+  }
+
+  function buildAdvancedSchema() {
+    const schema = {};
+    state.tracks.forEach((track) => {
+      const metrics = track.analysis_metrics || {};
+      Object.keys(metrics).forEach((key) => {
+        if (CORE_ADVANCED_EXCLUDES.has(key)) return;
+        const value = metrics[key];
+        if (value == null) return;
+        if (!schema[key]) {
+          schema[key] = { type: null, min: null, max: null, options: new Set() };
+        }
+        if (typeof value === "number" && Number.isFinite(value)) {
+          schema[key].type = "number";
+          schema[key].min = schema[key].min == null ? value : Math.min(schema[key].min, value);
+          schema[key].max = schema[key].max == null ? value : Math.max(schema[key].max, value);
+        } else if (typeof value === "boolean") {
+          schema[key].type = "boolean";
+        } else if (typeof value === "string") {
+          schema[key].type = "string";
+          schema[key].options.add(value);
+        }
+      });
+    });
+    Object.keys(schema).forEach((key) => {
+      const definition = schema[key];
+      if (definition.type === "string" && definition.options.size > 20) {
+        delete schema[key];
+      }
+    });
+    state.advancedSchema = schema;
+    Object.keys(schema).forEach((key) => {
+      if (state.filters.advanced[key] != null) return;
+      if (schema[key].type === "number") state.filters.advanced[key] = { min: null, max: null };
+      else if (schema[key].type === "boolean") state.filters.advanced[key] = null;
+      else state.filters.advanced[key] = "";
     });
   }
 
-  function queueSummaryText(data) {
-    if (typeof data?.message === "string" && data.message) return data.message;
-    const added = data?.added || 0;
-    const failed = data?.failed || 0;
-    if (failed > 0) {
-      return `Added ${added} track(s), failed ${failed}.`;
+  function renderAdvancedFilters() {
+    const keys = Object.keys(state.advancedSchema).sort();
+    if (keys.length === 0) {
+      dom.advancedFilters.innerHTML = "<p class=\"action-status\">No additional metadata fields found for this result set.</p>";
+      return;
     }
-    return `Added ${added} track(s) to your queue.`;
-  }
-
-  function queueErrorText(data, fallbackStatus) {
-    if (typeof data?.detail === "string") return data.detail;
-    const detail = typeof data?.detail === "object" && data?.detail ? data.detail : null;
-    if (detail?.message) {
-      const errors = Array.isArray(detail.errors) ? detail.errors : [];
-      if (errors.length === 0) return detail.message;
-      const list = errors
-        .slice(0, 2)
-        .map((e) => e?.message || e?.reason || "Unknown queue error")
-        .join(" | ");
-      const remaining = errors.length > 2 ? ` (+${errors.length - 2} more)` : "";
-      return `${detail.message} ${list}${remaining}`;
-    }
-    if (Array.isArray(data?.errors) && data.errors.length > 0) {
-      const list = data.errors
-        .slice(0, 2)
-        .map((e) => e?.message || e?.reason || "Unknown queue error")
-        .join(" | ");
-      const remaining = data.errors.length > 2 ? ` (+${data.errors.length - 2} more)` : "";
-      return `${list}${remaining}`;
-    }
-    return `Failed (${fallbackStatus})`;
-  }
-
-  async function queueSingleTrack(uri, btn) {
-    if (!spotifyConnected) return;
-    const original = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = "...";
-    try {
-      const resp = await fetch("/api/spotify/queue", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ track_uris: [uri] }),
-      });
-      if (!resp.ok) {
-        const data = await parseErrorPayload(resp);
-        throw new Error(queueErrorText(data, resp.status));
+    dom.advancedFilters.innerHTML = keys.map((key) => {
+      const def = state.advancedSchema[key];
+      const label = key.replace(/_/g, " ");
+      const current = state.filters.advanced[key];
+      if (def.type === "number") {
+        const minVal = current?.min == null ? "" : String(current.min);
+        const maxVal = current?.max == null ? "" : String(current.max);
+        return `<div class="advanced-item" data-adv-key="${esc(key)}"><label>${esc(label)}</label><div class="advanced-range"><input type="number" data-adv-role="min" placeholder="min (${esc(def.min)})" value="${esc(minVal)}" /><input type="number" data-adv-role="max" placeholder="max (${esc(def.max)})" value="${esc(maxVal)}" /></div></div>`;
       }
-      const data = await resp.json();
-      btn.textContent = data.failed ? "!" : "\u2713";
-      actionStatus.textContent = queueSummaryText(data);
-      setTimeout(() => { btn.textContent = original; }, 1200);
-    } catch (err) {
-      btn.textContent = "!";
-      actionStatus.textContent = err.message || "Could not add to queue.";
-      setTimeout(() => { btn.textContent = original; }, 1200);
+      if (def.type === "boolean") {
+        return `<div class="advanced-item" data-adv-key="${esc(key)}"><label>${esc(label)}</label><select data-adv-role="bool"><option value="" ${current == null ? "selected" : ""}>Any</option><option value="true" ${current === true ? "selected" : ""}>True</option><option value="false" ${current === false ? "selected" : ""}>False</option></select></div>`;
+      }
+      const options = Array.from(def.options).sort().map((opt) => `<option value="${esc(opt)}" ${current === opt ? "selected" : ""}>${esc(opt)}</option>`).join("");
+      return `<div class="advanced-item" data-adv-key="${esc(key)}"><label>${esc(label)}</label><select data-adv-role="string"><option value="">Any</option>${options}</select></div>`;
+    }).join("");
+  }
+
+  function passesCoreFilters(track) {
+    const core = getCoreFilterValues();
+    if (track.popularity != null && (track.popularity < core.popMin || track.popularity > core.popMax)) return false;
+    if (track.release_year != null && (track.release_year < core.yearMin || track.release_year > core.yearMax)) return false;
+    if (state.filters.selectedTags.size > 0) {
+      const tags = new Set((track.tags || []).map((tag) => normalizeTag(tag)));
+      const matches = Array.from(state.filters.selectedTags).some((tag) => tags.has(tag));
+      if (!matches) return false;
+    }
+    if (state.seed?.bpm != null && track.bpm != null && core.bpmTolerancePct < 100) {
+      const tolerance = (state.seed.bpm * core.bpmTolerancePct) / 100;
+      if (Math.abs(track.bpm - state.seed.bpm) > tolerance) return false;
+    }
+    const inst = numericValue(track.audio_features?.instrumentalness)
+      ?? numericValue(track.analysis_metrics?.instrumentalness);
+    const trackTags = new Set((track.tags || []).map((tag) => normalizeTag(tag)));
+    const tagSaysInstrumental = trackTags.has("instrumental") || trackTags.has("ambient");
+    const tagSaysVocal = trackTags.has("vocal") || trackTags.has("vocals");
+    if (core.instrumentalOnly && !core.vocalOnly) {
+      const pass = (inst != null && inst >= 0.6) || tagSaysInstrumental;
+      if (!pass) return false;
+    }
+    if (core.vocalOnly && !core.instrumentalOnly) {
+      const pass = (inst != null && inst <= 0.4) || tagSaysVocal;
+      if (!pass) return false;
+    }
+    return true;
+  }
+
+  function passesAdvancedFilters(track) {
+    return Object.entries(state.advancedSchema).every(([key, def]) => {
+      const selected = state.filters.advanced[key];
+      if (def.type === "number") {
+        if (selected?.min == null && selected?.max == null) return true;
+        const value = readTrackMetric(track, key);
+        if (typeof value !== "number" || !Number.isFinite(value)) return false;
+        if (selected.min != null && value < selected.min) return false;
+        if (selected.max != null && value > selected.max) return false;
+        return true;
+      }
+      if (def.type === "boolean") {
+        if (selected == null) return true;
+        const value = readTrackMetric(track, key);
+        return value === selected;
+      }
+      if (!selected) return true;
+      return String(readTrackMetric(track, key) || "") === selected;
+    });
+  }
+
+  function filteredTracks() {
+    return state.tracks.filter((track) => passesCoreFilters(track) && passesAdvancedFilters(track));
+  }
+
+  function renderResults() {
+    const tracks = filteredTracks();
+    dom.actionsBar.classList.toggle("hidden", tracks.length === 0);
+    dom.results.innerHTML = tracks.length > 0
+      ? tracks.map((track, index) => {
+        const artists = (track.artists || []).join(", ");
+        const key = trackKey(track);
+        return `<article class="track-card"><div class="track-info"><div class="name">${index + 1}. ${esc(track.name || "")}</div><div class="detail">${esc(artists)}</div><div class="detail">${esc(track.album || "")}</div></div><div class="track-actions-inline"><button type="button" class="action-btn" data-action="queue" data-track-key="${esc(key)}">+ Queue</button><button type="button" class="action-btn" data-action="board" data-track-key="${esc(key)}">+ Board</button><button type="button" class="action-btn" data-action="drill" data-track-key="${esc(key)}">Drill Down</button>${track.spotify_url ? `<a class="action-btn" href="${esc(track.spotify_url)}" target="_blank" rel="noopener noreferrer">Open</a>` : ""}</div></article>`;
+      }).join("")
+      : "<p>No results found with current filters.</p>";
+    dom.discoverMoreBtn.classList.toggle("hidden", !state.lastQueryUrl || state.tracks.length === 0);
+  }
+
+  function toBoardItem(track) {
+    return {
+      title: track.name || "",
+      artist: (track.artists || [])[0] || "",
+      spotifyUri: track.spotify_id ? `spotify:track:${track.spotify_id}` : null,
+      source: "similarity_search",
+      addedAt: new Date().toISOString(),
+      metadata: { album: track.album || null }
+    };
+  }
+
+  function renderBoard() {
+    dom.boardPanel.classList.remove("hidden");
+    dom.boardCount.textContent = String(state.board.length);
+    dom.boardList.innerHTML = state.board.length > 0
+      ? state.board.map((item) => `<div class="queue-item"><div><strong>${esc(item.artist)} - ${esc(item.title)}</strong></div><button type="button" class="action-btn" data-board-remove="${esc(boardKey(item))}">Remove</button></div>`).join("")
+      : "<p>Memory Board is empty.</p>";
+  }
+
+  function addBoardItems(items) {
+    const byKey = new Map(state.board.map((item) => [boardKey(item), item]));
+    items.forEach((item) => byKey.set(boardKey(item), item));
+    state.board = Array.from(byKey.values());
+    saveJson(STORAGE_KEYS.board, state.board);
+    renderBoard();
+  }
+
+  async function checkSpotify() {
+    try {
+      const response = await fetch("/api/spotify/status");
+      const data = await response.json();
+      state.spotifyConnected = data.connected === true;
+      dom.loginBtn.classList.toggle("hidden", state.spotifyConnected);
+      dom.logoutBtn.classList.toggle("hidden", !state.spotifyConnected);
+      dom.spotifyUser.classList.toggle("hidden", !state.spotifyConnected);
+      dom.spotifyUser.textContent = state.spotifyConnected ? data.user || "Spotify connected" : "";
+      if (state.spotifyConnected) await loadPlaylists();
+    } catch (_) {
+      state.spotifyConnected = false;
+    }
+  }
+
+  async function loadPlaylists() {
+    if (!state.spotifyConnected) return;
+    try {
+      const response = await fetch("/api/spotify/playlists");
+      if (!response.ok) return;
+      const data = await response.json();
+      state.playlists = Array.isArray(data) ? data : [];
+      dom.boardExistingPlaylist.innerHTML = state.playlists.map((playlist) => `<option value="${esc(playlist.id)}">${esc(playlist.name)}</option>`).join("");
+    } catch (_) {}
+  }
+
+  function setError(message) {
+    dom.error.textContent = message;
+    dom.error.classList.remove("hidden");
+  }
+
+  function clearError() {
+    dom.error.classList.add("hidden");
+    dom.error.textContent = "";
+  }
+
+  async function fetchUnified(queryUrl, options = {}) {
+    const payload = {
+      url: queryUrl,
+      limit: Number(dom.limit?.value || 20),
+      exclude: options.exclude ?? [],
+      strict_mapped_only: false,
+      use_metadata_fallback: true,
+      weights: getWeights(),
+      filters: getBackendFiltersPayload()
+    };
+    const response = await fetch("/api/similar/unified", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.detail?.message || data.detail || `Request failed (${response.status})`);
+    }
+    return data;
+  }
+
+  async function runSearch(queryUrl, options = {}) {
+    if (!queryUrl) return;
+    clearError();
+    dom.loading.classList.remove("hidden");
+    try {
+      const data = await fetchUnified(queryUrl, options);
+      const incoming = Array.isArray(data.similar_tracks) ? data.similar_tracks : [];
+      if (options.append) {
+        const byKey = new Map(state.tracks.map((track) => [trackKey(track), track]));
+        incoming.forEach((track) => byKey.set(trackKey(track), track));
+        state.tracks = Array.from(byKey.values());
+      } else {
+        state.tracks = incoming;
+      }
+      state.seed = data.seed_track || state.seed;
+      state.tagCategories = data.tag_categories || {};
+      state.lastQueryUrl = queryUrl;
+      state.tracks.forEach((track) => state.seenTrackKeys.add(trackKey(track)));
+      if (!options.skipBreadcrumbPush && state.seed) {
+        const seedLabel = `${(state.seed.artists || []).join(", ")} - ${state.seed.name || ""}`;
+        const last = state.breadcrumbs[state.breadcrumbs.length - 1];
+        if (!last || last.label !== seedLabel) state.breadcrumbs.push({ url: queryUrl, label: seedLabel });
+      }
+      dom.filterPanel.classList.remove("hidden");
+      dom.bpmFilter.classList.toggle("hidden", state.seed?.bpm == null);
+      dom.bpmLabel.textContent = dom.bpmTolerance.value === "100" ? "Any" : `±${dom.bpmTolerance.value}%`;
+      buildAdvancedSchema();
+      renderSeed();
+      renderTagFilters();
+      renderAdvancedFilters();
+      renderBreadcrumbs();
+      renderActiveFilterCount();
+      renderResults();
+    } catch (error) {
+      setError(error.message || "Search failed");
     } finally {
-      setTimeout(() => { btn.disabled = false; }, 150);
+      dom.loading.classList.add("hidden");
     }
   }
 
-  async function queueTrack(track, btn = null) {
-    if (!track) return;
-    if (!spotifyConnected) {
-      actionStatus.textContent = "Connect Spotify to use Spotify queue.";
-      return;
-    }
-    if (!track.spotify_id) {
-      actionStatus.textContent = "This track has no Spotify match.";
-      return;
-    }
-    const uri = `spotify:track:${track.spotify_id}`;
-    console.log("[queueTrack] routing to Spotify queue", { uri });
-    if (btn) {
-      await queueSingleTrack(uri, btn);
+  async function queueTrack(uri) {
+    if (!uri) {
+      dom.actionStatus.textContent = "Track has no Spotify URI.";
       return;
     }
     try {
-      const resp = await fetch("/api/spotify/queue", {
+      const response = await fetch("/api/spotify/queue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ track_uris: [uri] }),
+        body: JSON.stringify({ track_uris: [uri] })
       });
-      if (!resp.ok) {
-        const data = await parseErrorPayload(resp);
-        throw new Error(queueErrorText(data, resp.status));
-      }
-      const data = await resp.json();
-      actionStatus.textContent = queueSummaryText(data);
-    } catch (err) {
-      actionStatus.textContent = err.message || "Could not add to Spotify queue.";
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail?.message || data.detail || "Queue failed");
+      dom.actionStatus.textContent = data.message || "Added to queue.";
+    } catch (error) {
+      dom.actionStatus.textContent = error.message || "Queue failed";
     }
   }
 
-  async function queueFilteredTracks() {
-    const ranked = rankTracks().slice(0, displayLimit);
-    if (!ranked.length) {
-      actionStatus.textContent = "No tracks in current filtered view.";
-      return;
-    }
-
-    if (!spotifyConnected) {
-      actionStatus.textContent = "Connect Spotify to use Spotify queue.";
-      return;
-    }
-    const mappable = ranked.filter((t) => t.spotify_id);
-    const uris = mappable.map((t) => `spotify:track:${t.spotify_id}`);
+  async function queueVisible() {
+    const uris = filteredTracks().map((track) => (track.spotify_id ? `spotify:track:${track.spotify_id}` : null)).filter(Boolean);
     if (!uris.length) {
-      actionStatus.textContent = "No Spotify tracks in current results.";
+      dom.actionStatus.textContent = "No mappable tracks in current view.";
       return;
     }
-    actionStatus.textContent = `Adding to Spotify queue (${mappable.length} mappable, ${ranked.length - mappable.length} skipped)...`;
-    addQueueBtn.disabled = true;
     try {
-      const resp = await fetch("/api/spotify/queue", {
+      const response = await fetch("/api/spotify/queue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ track_uris: uris }),
+        body: JSON.stringify({ track_uris: uris })
       });
-      if (!resp.ok) {
-        const data = await parseErrorPayload(resp);
-        throw new Error(queueErrorText(data, resp.status));
-      }
-      const data = await resp.json();
-      actionStatus.textContent = queueSummaryText(data);
-    } catch (err) {
-      actionStatus.textContent = err.message;
-    } finally {
-      addQueueBtn.disabled = false;
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail?.message || data.detail || "Queue failed");
+      dom.actionStatus.textContent = data.message || `Queued ${uris.length} track(s).`;
+    } catch (error) {
+      dom.actionStatus.textContent = error.message || "Queue failed";
     }
   }
 
-  function renderExternalQueuePanel() {
-    externalQueuePanel.classList.add("hidden");
+  async function resolveUri(item) {
+    if (item.spotifyUri) return item.spotifyUri;
+    const key = boardKey(item);
+    if (state.uriCache[key]) return state.uriCache[key];
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const query = encodeURIComponent(`artist:${item.artist} track:${item.title}`);
+      const response = await fetch(`/api/spotify/search-track?q=${query}`);
+      if (response.status === 429) {
+        const retryAfter = Number(response.headers.get("Retry-After") || "1");
+        dom.boardStatus.textContent = `Rate limited, waiting ${retryAfter}s...`;
+        await new Promise((resolve) => window.setTimeout(resolve, retryAfter * 1000 * (attempt + 1)));
+        continue;
+      }
+      if (!response.ok) return null;
+      const data = await response.json().catch(() => ({}));
+      if (!data.spotify_uri) return null;
+      state.uriCache[key] = data.spotify_uri;
+      saveJson(STORAGE_KEYS.uriCache, state.uriCache);
+      return data.spotify_uri;
+    }
+    return null;
   }
 
-  function openExternalQueueItem(queueId, updateCurrent) {
-    console.log("[openExternalQueueItem] disabled for spotify-only queue", {
-      queueId,
-      updateCurrent,
-    });
-  }
-
-  // --- Rendering ---
-  function renderSeed(track) {
-    const spotifyLink = track.spotify_url
-      ? renderSpotifyLink(track.name, track.spotify_url, track.spotify_id)
-      : esc(track.name);
-    const bpm = track.bpm ? `<span class="seed-bpm">${Math.round(track.bpm)} BPM</span>` : "";
-    const tagsHtml =
-      track.tags && track.tags.length > 0
-        ? `<div class="seed-tags">${track.tags.slice(0, 12).map((t) => `<span class="seed-tag">${esc(t)}</span>`).join("")}</div>`
-        : "";
-    const afHtml =
-      track.audio_features
-        ? `<div class="seed-audio-features">${audioFeatureBadges(track.audio_features)}</div>`
-        : "";
-    seedEl.innerHTML = `
-      ${track.album_art ? `<img src="${track.album_art}" alt="Album art" />` : ""}
-      <div class="seed-meta">
-        <h2>${spotifyLink} ${spotifyBtn(track.spotify_url, track.spotify_id)}</h2>
-        <div class="artists">${esc(track.artists.join(", "))} &mdash; ${esc(track.album)}</div>
-        ${bpm}
-        ${tagsHtml}
-        ${afHtml}
-      </div>
-    `;
-    seedEl.classList.remove("hidden");
-    bindSpotifyOpenLinks(seedEl);
-  }
-
-  function renderResults(tracks, totalAvailable) {
-    visibleTracks = tracks;
-    if (!tracks.length) {
-      resultsEl.innerHTML =
-        allTracks.length === 0
-          ? "<p>No similar tracks found for this seed. Try another track, the other similarity mode, or (in the API) set <code>strict_mapped_only</code> to false if you use strict Spotify-only results.</p>"
-          : "<p>No tracks match your filters. Try loosening BPM or tag filters, or clear selected tags.</p>";
+  async function createPlaylistFromBoard() {
+    if (!state.spotifyConnected) {
+      dom.boardStatus.textContent = "Connect Spotify first.";
       return;
     }
-    const countNote = totalAvailable > tracks.length
-      ? ` (showing ${tracks.length} of ${totalAvailable})`
-      : ` (${tracks.length})`;
-    const approxNote = approximated
-      ? `<div class="approx-notice">Audio features estimated from tags (Spotify audio-features API unavailable for this app)</div>`
-      : "";
-    let html = `<h3>Cat ID Matches${countNote}</h3>${approxNote}`;
-    tracks.forEach((t, idx) => {
-      const previewBtn = t.preview_url
-        ? `<button class="play-btn" data-url="${t.preview_url}" title="Preview">&#9654;</button>`
-        : "";
-      const nameLink = t.spotify_url
-        ? renderSpotifyLink(t.name, t.spotify_url, t.spotify_id)
-        : esc(t.name);
-      const trackTags =
-        t.tags && t.tags.length > 0
-          ? `<div class="track-card-tags">${t.tags.slice(0, 6).map((tag) => `<span class="track-tag">${esc(tag)}</span>`).join("")}</div>`
-          : "";
-      const afHtml =
-        t.audio_features
-          ? `<div class="track-card-tags">${audioFeatureBadges(t.audio_features)}</div>`
-          : "";
-      const queueBtn =
-        t.spotify_id
-          ? `<button class="queue-btn provider-queue-btn" data-track-idx="${idx}" title="Add to Spotify queue" aria-label="Queue ${esc(t.name)}">+Q</button>`
-          : "";
-      const textBtn = `<button class="queue-btn text-list-btn" data-track-idx="${idx}" title="Add to text playlist list">+TXT</button>`;
-      const mappingNote = !t.spotify_id
-        ? `<div class="detail">No Spotify match found.</div>`
-        : "";
-      const drillBtn =
-        t.spotify_url
-          ? `<button class="drill-btn" data-drill-idx="${idx}" title="Drill down with this track" aria-label="Drill down with ${esc(t.name)}">Drill</button>`
-          : "";
-      html += `
-        <div class="track-card">
-          ${t.album_art ? `<img src="${t.album_art}" alt="" />` : '<div class="img-placeholder"></div>'}
-          <div class="track-info">
-            <div class="name">${nameLink}</div>
-            <div class="detail">${esc(t.artists.join(", "))}${t.album ? " &mdash; " + esc(t.album) : ""}</div>
-            ${mappingNote}
-            ${trackTags}
-            ${afHtml}
-          </div>
-          <div class="track-badges">
-            ${matchBadge(t.match_score)}
-            ${bpmBadge(t.bpm)}
-          </div>
-          <div class="track-actions">
-            ${previewBtn}
-            ${queueBtn}
-            ${textBtn}
-            ${drillBtn}
-            ${spotifyBtn(t.spotify_url, t.spotify_id)}
-          </div>
-        </div>
-      `;
-    });
-    resultsEl.innerHTML = html;
-
-    resultsEl.querySelectorAll(".play-btn").forEach((btn) => {
-      btn.addEventListener("click", () => togglePreview(btn));
-    });
-    resultsEl.querySelectorAll(".provider-queue-btn").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const idx = parseInt(btn.dataset.trackIdx, 10);
-        const track = visibleTracks[idx];
-        await queueTrack(track, btn);
-      });
-    });
-    resultsEl.querySelectorAll(".text-list-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const idx = parseInt(btn.dataset.trackIdx, 10);
-        const track = visibleTracks[idx];
-        if (!track) return;
-        appendTrackToTextList(track);
-        textPlaylistStatus.textContent = `Added "${track.name}" to text list.`;
-      });
-    });
-    resultsEl.querySelectorAll(".drill-btn").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const idx = parseInt(btn.dataset.drillIdx, 10);
-        const track = visibleTracks[idx];
-        if (!track) return;
-        traceHistory.push({
-          track,
-          tags: track.tags || [],
-          audioFeatures: track.audio_features || null,
-          bpm: track.bpm || null,
+    if (state.board.length === 0) {
+      dom.boardStatus.textContent = "Memory Board is empty.";
+      return;
+    }
+    const resolved = [];
+    const unresolved = [];
+    for (let i = 0; i < state.board.length; i += 1) {
+      const item = state.board[i];
+      dom.boardStatus.textContent = `Resolving track ${i + 1} of ${state.board.length}...`;
+      const uri = await resolveUri(item);
+      if (uri) resolved.push(uri);
+      else unresolved.push(`${item.artist} - ${item.title}`);
+    }
+    if (resolved.length === 0) {
+      dom.boardStatus.textContent = "No tracks could be resolved to Spotify URIs.";
+      return;
+    }
+    const target = dom.boardPlaylistTarget.value;
+    try {
+      let playlistUrl = "";
+      if (target === "existing") {
+        const playlistId = dom.boardExistingPlaylist.value;
+        const response = await fetch(`/api/spotify/playlists/${playlistId}/tracks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ track_uris: resolved })
         });
-        await runDrillSearch(track);
-      });
-    });
-    bindSpotifyOpenLinks(resultsEl);
-    renderExternalQueuePanel();
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail?.message || data.detail || "Could not add tracks");
+        playlistUrl = playlistId ? `https://open.spotify.com/playlist/${playlistId}` : "";
+      } else {
+        const response = await fetch("/api/spotify/playlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: (dom.boardPlaylistName.value || "Cat-ID Memory Board").trim(),
+            track_uris: resolved,
+            public: false
+          })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail?.message || data.detail || "Could not create playlist");
+        playlistUrl = data.playlist_url || "";
+      }
+      const message = unresolved.length > 0
+        ? `Playlist updated (${resolved.length} added, ${unresolved.length} unresolved).`
+        : `Playlist updated (${resolved.length} added).`;
+      dom.boardStatus.textContent = message;
+      if (playlistUrl) {
+        dom.boardStatus.innerHTML = `${esc(message)} <a href="${esc(playlistUrl)}" target="_blank" rel="noopener noreferrer">Open in Spotify</a>`;
+      }
+    } catch (error) {
+      dom.boardStatus.textContent = error.message || "Playlist operation failed.";
+    }
   }
 
-  // --- Audio preview ---
-  function togglePreview(btn) {
-    const url = btn.dataset.url;
-    if (currentAudio && currentAudio.src === url) {
-      stopAudio();
+  async function copyBoardText() {
+    const text = state.board.map((item) => `${item.artist} - ${item.title}`).join("\n");
+    if (!text) {
+      dom.boardStatus.textContent = "Nothing to copy.";
       return;
     }
-    stopAudio();
-    currentAudio = new Audio(url);
-    currentAudio.volume = 0.5;
-    currentAudio.play().catch(() => {
-      btn.innerHTML = "&#9654;";
-      currentAudio = null;
-      actionStatus.textContent = "Preview could not be played in this browser context.";
-    });
-    btn.innerHTML = "&#9724;";
-    currentAudio.addEventListener("ended", () => {
-      btn.innerHTML = "&#9654;";
-      currentAudio = null;
-    });
+    await navigator.clipboard.writeText(text);
+    dom.boardStatus.textContent = "Copied board tracks as text.";
   }
 
-  function stopAudio() {
-    if (currentAudio) {
-      currentAudio.pause();
-      currentAudio = null;
-      document.querySelectorAll(".play-btn").forEach((b) => {
-        b.innerHTML = "&#9654;";
-      });
+  function resetFilters() {
+    dom.popularityMin.value = "0";
+    dom.popularityMax.value = "100";
+    dom.releaseYearMin.value = "1900";
+    dom.releaseYearMax.value = "2100";
+    dom.bpmTolerance.value = "100";
+    dom.bpmLabel.textContent = "Any";
+    dom.instrumentalOnly.checked = false;
+    dom.vocalOnly.checked = false;
+    state.filters.selectedTags.clear();
+    Object.keys(state.filters.advanced).forEach((key) => {
+      const def = state.advancedSchema[key];
+      state.filters.advanced[key] = def?.type === "number" ? { min: null, max: null } : (def?.type === "boolean" ? null : "");
+    });
+    renderTagFilters();
+    renderAdvancedFilters();
+    renderActiveFilterCount();
+    renderResults();
+  }
+
+  function onResultsClick(event) {
+    const target = event.target.closest("[data-action]");
+    if (!target) return;
+    const track = state.tracks.find((item) => trackKey(item) === target.dataset.trackKey);
+    if (!track) return;
+    if (target.dataset.action === "queue") {
+      queueTrack(track.spotify_id ? `spotify:track:${track.spotify_id}` : "");
+      return;
+    }
+    if (target.dataset.action === "board") {
+      addBoardItems([toBoardItem(track)]);
+      dom.boardStatus.textContent = "Added to Memory Board.";
+      return;
+    }
+    if (target.dataset.action === "drill") {
+      const nextSeed = track.spotify_url || (track.spotify_id ? `https://open.spotify.com/track/${track.spotify_id}` : "");
+      if (!nextSeed) {
+        setError("Cannot drill down on a track without Spotify ID.");
+        return;
+      }
+      runSearch(nextSeed);
     }
   }
 
-  function esc(str) {
-    const d = document.createElement("div");
-    d.textContent = str;
-    return d.innerHTML;
-  }
-
-  // --- Spotify auth ---
-  async function checkSpotifyStatus() {
-    try {
-      const resp = await fetch("/api/spotify/status");
-      const data = await resp.json();
-      spotifyConnected = data.connected;
-      if (data.connected) {
-        spotifyLoginBtn.classList.add("hidden");
-        spotifyUserEl.textContent = data.user;
-        spotifyUserEl.classList.remove("hidden");
-        spotifyLogoutBtn.classList.remove("hidden");
-      } else {
-        spotifyLoginBtn.classList.remove("hidden");
-        spotifyUserEl.classList.add("hidden");
-        spotifyLogoutBtn.classList.add("hidden");
-      }
-      syncProviderOptions();
-      updateActionsBar();
-      renderExternalQueuePanel();
-    } catch (_) { /* ignore */ }
-  }
-
-  function updateActionsBar() {
-    if (allTracks.length > 0) {
-      actionsBar.classList.remove("hidden");
-      textPlaylistPanel.classList.remove("hidden");
-      savePlaylistBtn.disabled = isRequestInFlight || !spotifyConnected;
-      addQueueBtn.disabled = isRequestInFlight;
-      const degradeNote = mappingDegradedReason ? ` (${mappingDegradedReason.replaceAll("_", " ")})` : "";
-      const externalDegradeNote = externalLinksDegradedReason
-        ? ` External links degraded: ${externalLinksDegradedReason.replaceAll("_", " ")}.`
-        : "";
-      const sourceNote =
-        mappingUsedUserToken
-          ? " User-token mapping fallback active."
-          : (mappingSourceCounts.app_text_search || mappingSourceCounts.app_isrc_search || mappingSourceCounts.spotify_id_hint)
-            ? " App-token mapping path active."
-            : "";
-      if (!spotifyConnected) {
-        actionStatus.textContent = "Connect Spotify for queue and playlist actions.";
-      } else if (strictMappedOnly) {
-        actionStatus.textContent = `${mappedCount} Spotify-ready track(s) (strict)${degradeNote}.${sourceNote}${externalDegradeNote}`;
-      } else {
-        actionStatus.textContent = `${mappedCount}/${mappedCount + unmappedCount} tracks mapped to Spotify${degradeNote}.${sourceNote}${externalDegradeNote}`;
-      }
+  dom.form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const url = dom.urlInput.value.trim();
+    state.breadcrumbs = [];
+    state.seenTrackKeys.clear();
+    runSearch(url, { exclude: [] });
+  });
+  dom.reloadBtn.addEventListener("click", () => runSearch(state.lastQueryUrl || dom.urlInput.value.trim(), { skipBreadcrumbPush: true }));
+  dom.discoverMoreBtn.addEventListener("click", () => runSearch(state.lastQueryUrl || dom.urlInput.value.trim(), {
+    append: true,
+    skipBreadcrumbPush: true,
+    exclude: Array.from(state.seenTrackKeys)
+  }));
+  dom.results.addEventListener("click", onResultsClick);
+  dom.quickFilters.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-tag]");
+    if (!chip) return;
+    const tag = normalizeTag(chip.dataset.tag);
+    if (!tag) return;
+    if (state.filters.selectedTags.has(tag)) state.filters.selectedTags.delete(tag);
+    else state.filters.selectedTags.add(tag);
+    renderTagFilters();
+    renderActiveFilterCount();
+    renderResults();
+  });
+  dom.tagSections.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-tag]");
+    if (!chip) return;
+    const tag = normalizeTag(chip.dataset.tag);
+    if (!tag) return;
+    if (state.filters.selectedTags.has(tag)) state.filters.selectedTags.delete(tag);
+    else state.filters.selectedTags.add(tag);
+    renderTagFilters();
+    renderActiveFilterCount();
+    renderResults();
+  });
+  [dom.popularityMin, dom.popularityMax, dom.releaseYearMin, dom.releaseYearMax, dom.instrumentalOnly, dom.vocalOnly].forEach((element) => {
+    element?.addEventListener("input", () => {
+      renderActiveFilterCount();
+      renderResults();
+    });
+    element?.addEventListener("change", () => {
+      renderActiveFilterCount();
+      renderResults();
+    });
+  });
+  dom.bpmTolerance.addEventListener("input", () => {
+    dom.bpmLabel.textContent = dom.bpmTolerance.value === "100" ? "Any" : `±${dom.bpmTolerance.value}%`;
+    renderActiveFilterCount();
+    renderResults();
+  });
+  dom.advancedFilters.addEventListener("input", (event) => {
+    const container = event.target.closest("[data-adv-key]");
+    if (!container) return;
+    const key = container.dataset.advKey;
+    const def = state.advancedSchema[key];
+    if (!def) return;
+    if (def.type === "number") {
+      const minInput = container.querySelector("[data-adv-role='min']");
+      const maxInput = container.querySelector("[data-adv-role='max']");
+      const min = minInput?.value === "" ? null : Number(minInput.value);
+      const max = maxInput?.value === "" ? null : Number(maxInput.value);
+      state.filters.advanced[key] = {
+        min: Number.isFinite(min) ? min : null,
+        max: Number.isFinite(max) ? max : null
+      };
+    } else if (def.type === "boolean") {
+      const value = container.querySelector("[data-adv-role='bool']")?.value || "";
+      state.filters.advanced[key] = value === "" ? null : value === "true";
     } else {
-      actionsBar.classList.add("hidden");
-      textPlaylistPanel.classList.add("hidden");
+      state.filters.advanced[key] = container.querySelector("[data-adv-role='string']")?.value || "";
     }
-  }
-
-  function mergeTracksByKey(existingTracks, incomingTracks) {
-    const byKey = new Map();
-    for (const track of existingTracks) byKey.set(trackKey(track), track);
-    for (const track of incomingTracks) byKey.set(trackKey(track), track);
-    return [...byKey.values()];
-  }
-
-  function getActionableTrackUris() {
-    const ranked = rankTracks().slice(0, displayLimit);
-    const mappable = ranked.filter((t) => t.spotify_id);
-    const uris = mappable.map((t) => `spotify:track:${t.spotify_id}`);
-    return { uris, shown: ranked.length, mappable: mappable.length, unmapped: ranked.length - mappable.length };
-  }
-
-  spotifyLoginBtn.addEventListener("click", () => {
-    window.location.href = "/api/spotify/login";
+    renderActiveFilterCount();
+    renderResults();
   });
-
-  spotifyLogoutBtn.addEventListener("click", async () => {
+  dom.resetFiltersBtn.addEventListener("click", resetFilters);
+  dom.loginBtn.addEventListener("click", () => { window.location.href = "/api/spotify/login"; });
+  dom.logoutBtn.addEventListener("click", async () => {
     await fetch("/api/spotify/logout", { method: "POST" });
-    spotifyConnected = false;
-    spotifyLoginBtn.classList.remove("hidden");
-    spotifyUserEl.classList.add("hidden");
-    spotifyLogoutBtn.classList.add("hidden");
-    syncProviderOptions();
-    updateActionsBar();
-    renderExternalQueuePanel();
+    await checkSpotify();
+  });
+  dom.addQueueBtn.addEventListener("click", queueVisible);
+
+  dom.boardAddVisibleBtn.addEventListener("click", () => {
+    addBoardItems(filteredTracks().map(toBoardItem));
+    dom.boardStatus.textContent = "Added visible tracks to Memory Board.";
+  });
+  dom.boardClearBtn.addEventListener("click", () => {
+    state.board = [];
+    saveJson(STORAGE_KEYS.board, state.board);
+    renderBoard();
+    dom.boardStatus.textContent = "Memory Board cleared.";
+  });
+  dom.boardCopyBtn.addEventListener("click", () => {
+    copyBoardText().catch(() => { dom.boardStatus.textContent = "Clipboard copy failed."; });
+  });
+  dom.boardCreatePlaylistBtn.addEventListener("click", () => { createPlaylistFromBoard(); });
+  dom.boardPlaylistTarget.addEventListener("change", () => {
+    const useExisting = dom.boardPlaylistTarget.value === "existing";
+    dom.boardExistingPlaylist.classList.toggle("hidden", !useExisting);
+    dom.boardPlaylistName.classList.toggle("hidden", useExisting);
+  });
+  dom.boardList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-board-remove]");
+    if (!button) return;
+    state.board = state.board.filter((item) => boardKey(item) !== button.dataset.boardRemove);
+    saveJson(STORAGE_KEYS.board, state.board);
+    renderBoard();
+  });
+  dom.drillBreadcrumbs.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-crumb-index]");
+    if (!button) return;
+    const idx = Number(button.dataset.crumbIndex);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= state.breadcrumbs.length) return;
+    const crumb = state.breadcrumbs[idx];
+    state.breadcrumbs = state.breadcrumbs.slice(0, idx + 1);
+    runSearch(crumb.url, { skipBreadcrumbPush: true });
+  });
+  dom.drillCloseBtn.addEventListener("click", () => {
+    state.breadcrumbs = [];
+    renderBreadcrumbs();
   });
 
-  function getFilteredTrackUris() {
-    const ranked = rankTracks().slice(0, displayLimit);
-    return ranked
-      .filter((t) => t.spotify_id)
-      .map((t) => `spotify:track:${t.spotify_id}`);
-  }
-
-  savePlaylistBtn.addEventListener("click", async () => {
-    const actionData = getActionableTrackUris();
-    const uris = actionData.uris;
-    if (uris.length === 0) {
-      actionStatus.textContent = "No Spotify tracks in current results.";
-      return;
-    }
-    const name = seedTrack
-      ? `Follow Your Cat ID - ${seedTrack.name} - ${seedTrack.artists[0]}`
-      : "Follow Your Cat ID";
-    actionStatus.textContent = `Creating playlist (${actionData.mappable} mappable, ${actionData.unmapped} skipped)...`;
-    savePlaylistBtn.disabled = true;
-    try {
-      const resp = await fetch("/api/spotify/playlist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, track_uris: uris }),
-      });
-      if (!resp.ok) {
-        const data = await parseErrorPayload(resp);
-        throw new Error(queueErrorText(data, resp.status));
-      }
-      const data = await resp.json();
-      actionStatus.innerHTML = `Playlist created! <a href="${data.playlist_url}" target="_blank" rel="noopener">Open in Spotify</a>`;
-    } catch (err) {
-      actionStatus.textContent = err.message;
-    } finally {
-      savePlaylistBtn.disabled = false;
-    }
-  });
-
-  addQueueBtn.addEventListener("click", async () => {
-    await queueFilteredTracks();
-  });
-
-  syncProviderOptions();
-  externalProviderPref.addEventListener("change", () => {
-    QueueStore.savePreference(externalProviderPref.value);
-    selectedQueueProvider = externalProviderPref.value;
-    actionStatus.textContent = "Queue provider set to Spotify.";
-    updateActionsBar();
-    renderExternalQueuePanel();
-  });
-
-  textPlaylistLines.value = window.localStorage.getItem(TEXT_PLAYLIST_LINES_KEY) || "";
-  textPlaylistLines.addEventListener("input", () => {
-    window.localStorage.setItem(TEXT_PLAYLIST_LINES_KEY, textPlaylistLines.value);
-  });
-
-  textAddVisibleBtn.addEventListener("click", () => {
-    if (!visibleTracks.length) {
-      textPlaylistStatus.textContent = "No visible tracks to add.";
-      return;
-    }
-    const next = getTextLines();
-    visibleTracks.forEach((track) => {
-      const artist = (track.artists || []).join(", ").trim();
-      const title = (track.name || "").trim();
-      if (artist && title) next.push(`${artist} — ${title}`);
-    });
-    setTextLines(next);
-    textPlaylistStatus.textContent = `Added ${visibleTracks.length} visible track(s) to text list.`;
-  });
-
-  textExportBtn.addEventListener("click", () => {
-    const lines = getTextLines();
-    if (!lines.length) {
-      textPlaylistStatus.textContent = "Text list is empty. Nothing to export.";
-      return;
-    }
-    const payload = `${lines.join("\n")}\n`;
-    const blob = new Blob([payload], { type: "text/plain;charset=utf-8" });
-    const downloadUrl = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = downloadUrl;
-    anchor.download = "playlist-export.txt";
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(downloadUrl);
-    textPlaylistStatus.textContent = `Exported ${lines.length} line(s) as text file.`;
-  });
-
-  textCreateSpotifyBtn.addEventListener("click", async () => {
-    const lines = getTextLines();
-    if (!lines.length) {
-      textPlaylistStatus.textContent = "Text list is empty.";
-      return;
-    }
-    if (!spotifyConnected) {
-      textPlaylistStatus.textContent = "Connect Spotify first.";
-      return;
-    }
-    textCreateSpotifyBtn.disabled = true;
-    textPlaylistStatus.textContent = "Creating Spotify playlist from text...";
-    try {
-      const resp = await fetch("/api/spotify/playlist/from-text", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: (textPlaylistNameInput.value || "").trim() || "Cat-ID Text Playlist",
-          lines,
-        }),
-      });
-      const data = await parseErrorPayload(resp);
-      if (!resp.ok) {
-        const unmatched = Array.isArray(data?.unmatched) ? data.unmatched.length : 0;
-        throw new Error(`${data?.message || data?.detail || "Could not create playlist."} (${unmatched} unmatched)`);
-      }
-      const unmatchedCount = Array.isArray(data.unmatched) ? data.unmatched.length : 0;
-      textPlaylistStatus.innerHTML = `Playlist created (<a href="${data.playlist_url}" target="_blank" rel="noopener">open</a>). Matched ${data.matched_count}/${data.input_count}, unmatched ${unmatchedCount}.`;
-    } catch (err) {
-      textPlaylistStatus.textContent = err.message || "Could not create playlist from text.";
-    } finally {
-      textCreateSpotifyBtn.disabled = false;
-    }
-  });
-
-  renderExternalQueuePanel();
-  checkSpotifyStatus();
+  renderBoard();
+  renderActiveFilterCount();
+  checkSpotify();
 })();

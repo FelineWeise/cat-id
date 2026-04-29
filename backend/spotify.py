@@ -128,6 +128,13 @@ def extract_track_id(url_or_uri: str) -> str:
 
 def _track_to_info(t: dict) -> TrackInfo:
     album_images = t.get("album", {}).get("images", [])
+    release_date = t.get("album", {}).get("release_date", "")
+    release_year = None
+    if isinstance(release_date, str) and release_date:
+        try:
+            release_year = int(release_date[:4])
+        except Exception:
+            release_year = None
     return TrackInfo(
         name=t["name"],
         artists=[a["name"] for a in t["artists"]],
@@ -136,6 +143,8 @@ def _track_to_info(t: dict) -> TrackInfo:
         preview_url=t.get("preview_url"),
         spotify_url=t["external_urls"]["spotify"],
         spotify_id=t["id"],
+        popularity=t.get("popularity"),
+        release_year=release_year,
     )
 
 

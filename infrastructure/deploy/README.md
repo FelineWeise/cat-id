@@ -9,15 +9,15 @@ This folder is the **runtime contract** for cat-id on the **LAED base VM**: Comp
 | VPC, VM, flexible IP, volume, cloud-init, `/root/.docker/config.json` | **LAED** Terraform |
 | `cat-id.eu` DNS | **cat-id** [`../dns/`](../dns/) — A records → LAED **public** IP |
 | Optional dedicated registry namespace | **cat-id** [`../registry/`](../registry/) *or* push under LAED’s namespace |
-| Files in this folder on disk | You — e.g. **`/opt/cat-id-data`** |
+| Files in this folder on disk | You — e.g. **`/opt/cat-id`** |
 
 ## On the server
 
 1. Create a directory (example):
 
    ```bash
-   sudo mkdir -p /opt/cat-id-data
-   sudo chown "$USER:$USER" /opt/cat-id-data
+   sudo mkdir -p /opt/cat-id
+   sudo chown "$USER:$USER" /opt/cat-id
    ```
 
 2. Copy **`docker-compose.yml`**, **`Caddyfile`**, and create **`production.env`** from **`production.env.example`**.
@@ -80,6 +80,6 @@ Scaleway **GP/General** instances are **amd64**. Build and push from a Mac with:
 ## Isolation on a shared host
 
 - **Registry:** separate namespace or image path (`.../cat-id/...` vs `.../laed/...`).
-- **Runtime:** Docker network **`cat-id-net`** and data dir **`/opt/cat-id-data`** (vs LAED’s paths).
+- **Runtime:** Docker network **`cat-id-net`** and data dir **`/opt/cat-id`** (vs LAED’s paths).
 
 Full workflow: [../../docs/deploy_scaleway.md](../../docs/deploy_scaleway.md).

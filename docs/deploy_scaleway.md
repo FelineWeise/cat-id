@@ -2,7 +2,7 @@
 
 cat-id **does not** provision its own VPC, VM, or flexible IP in this repository. The **LAED** stack owns the server, volume, cloud-init, and (usually) Docker auth for Scaleway Container Registry. This repo owns **DNS** ([`infrastructure/dns/`](../infrastructure/dns/)), **production manifests** ([`infrastructure/deploy/`](../infrastructure/deploy/)), and **optional** registry namespace Terraform ([`infrastructure/registry/`](../infrastructure/registry/)).
 
-**Separation on one shared VM:** use a dedicated **registry namespace** or image path, a **Docker bridge network** (`cat-id-net`), and a **data directory** (e.g. `/opt/cat-id-data`) distinct from LAED’s paths—not a second VPC on the same OS without another NIC/VM.
+**Separation on one shared VM:** use a dedicated **registry namespace** or image path, a **Docker bridge network** (`cat-id-net`), and a **data directory** (e.g. `/opt/cat-id`) distinct from LAED’s paths—not a second VPC on the same OS without another NIC/VM.
 
 ## 0) Preconditions
 
@@ -88,7 +88,7 @@ Pin immutable **tags or digests** for production; avoid relying on `:latest`.
 ## 4) Runtime on the LAED host
 
 1. SSH to the LAED base server (`terraform output` from the **LAED** repo for IP/SSH).
-2. Place [`infrastructure/deploy/`](../infrastructure/deploy/) files on disk, e.g. **`/opt/cat-id-data`**: `docker-compose.yml`, `Caddyfile`, and **`production.env`** (from `production.env.example`).
+2. Place [`infrastructure/deploy/`](../infrastructure/deploy/) files on disk, e.g. **`/opt/cat-id`**: `docker-compose.yml`, `Caddyfile`, and **`production.env`** (from `production.env.example`).
 3. Reuse **`/root/.docker/config.json`** from LAED bootstrap for `docker compose pull` when running as root, or `docker login` to `rg.<region>.scw.cloud` once.
 4. From that directory:
 
@@ -123,4 +123,4 @@ For building from the repo or GHCR defaults, see [`infrastructure/compose/`](../
 |------|--------|
 | DNS | `infrastructure/dns` → A records to **LAED** public IP |
 | Image | Build → tag → push to **SCW CR** (optional `infrastructure/registry`) |
-| Run | Copy `infrastructure/deploy` to e.g. `/opt/cat-id-data` → `docker compose pull && up -d` |
+| Run | Copy `infrastructure/deploy` to e.g. `/opt/cat-id` → `docker compose pull && up -d` |

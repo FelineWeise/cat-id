@@ -60,6 +60,36 @@ class AudioSimilarRequest(BaseModel):
     )
 
 
+class SimilarityFilters(BaseModel):
+    bpm_min: float | None = None
+    bpm_max: float | None = None
+    popularity_min: int | None = Field(default=None, ge=0, le=100)
+    popularity_max: int | None = Field(default=None, ge=0, le=100)
+    release_year_min: int | None = None
+    release_year_max: int | None = None
+    tags_any: list[str] = Field(default_factory=list)
+    require_instrumental: bool | None = None
+
+
+class UnifiedSimilarRequest(BaseModel):
+    url: str = Field(description="Spotify track URL or URI")
+    limit: int = Field(default=20, ge=1, le=250, description="Number of similar tracks to return")
+    weights: AudioWeights = Field(default_factory=AudioWeights)
+    exclude: list[str] = Field(
+        default_factory=list,
+        description="Lowercased 'artist::trackname' keys to exclude from results",
+    )
+    strict_mapped_only: bool = Field(
+        default=False,
+        description="If true, only Spotify-mapped tracks are returned (queue/playlist-safe).",
+    )
+    use_metadata_fallback: bool = Field(
+        default=True,
+        description="If true, retry Spotify resolution using free MusicBrainz hints when direct mapping fails.",
+    )
+    filters: SimilarityFilters = Field(default_factory=SimilarityFilters)
+
+
 class TrackInfo(BaseModel):
     name: str
     artists: list[str]
@@ -74,8 +104,11 @@ class TrackInfo(BaseModel):
     spotify_mapping_status: Literal["mapped", "unmapped"] = "mapped"
     match_score: float | None = None
     bpm: float | None = None
+    popularity: int | None = None
+    release_year: int | None = None
     tags: list[str] = Field(default_factory=list)
     audio_features: AudioFeatures | None = None
+    analysis_metrics: dict[str, float | str | bool | None] = Field(default_factory=dict)
 
 
 class SimilarTracksResponse(BaseModel):
@@ -134,3 +167,12 @@ class TextPlaylistCreateResponse(BaseModel):
     input_count: int
     matched_count: int
     unmatched: list[TextPlaylistUnmatched] = Field(default_factory=list)
+
+
+class PlaylistLookupItem(BaseModel):
+    id: str
+    name: str
+    uri: str
+    owner: str
+    public: bool | None = None
+    tracks_total: int | None = None

@@ -30,6 +30,8 @@ SPOTIFY_REDIRECT_URI = (
 
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "").strip()
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "").strip()
+RAPIDAPI_SOUNDNET_HOST = os.getenv("RAPIDAPI_SOUNDNET_HOST", "track-analysis.p.rapidapi.com").strip()
 LASTFM_API_KEY = os.getenv("LASTFM_API_KEY", "").strip()
 SESSION_STORE_BACKEND = os.getenv("SESSION_STORE_BACKEND", "memory").strip().lower()
 SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "3600").strip() or "3600")
