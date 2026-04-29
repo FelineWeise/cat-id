@@ -20,6 +20,11 @@ def _bool_env(name: str, default: bool) -> bool:
 
 APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8000").strip().rstrip("/")
+# Browsers reject Secure cookies on http://; align with APP_BASE_URL unless overridden.
+SESSION_COOKIE_SECURE = _bool_env(
+    "SESSION_COOKIE_SECURE",
+    APP_BASE_URL.startswith("https://"),
+)
 SPOTIFY_REDIRECT_DERIVED_FROM_APP_BASE = f"{APP_BASE_URL}/api/spotify/callback"
 _explicit_redirect = os.getenv("SPOTIFY_REDIRECT_URI", "").strip()
 SPOTIFY_REDIRECT_URI = (

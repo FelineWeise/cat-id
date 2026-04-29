@@ -4,6 +4,7 @@ import base64
 import hashlib
 import logging
 import secrets
+import time
 from urllib.parse import urlencode
 
 import httpx
@@ -65,6 +66,14 @@ def get_authorize_url_pkce(state: str, code_challenge: str) -> str:
     return f"https://accounts.spotify.com/authorize?{urlencode(params)}"
 
 
+def normalize_token_expiry(token_info: dict) -> dict:
+    """Spotify returns expires_in but spotipy's is_token_expired expects expires_at."""
+    out = dict(token_info)
+    if "expires_at" not in out and "expires_in" in out:
+        out["expires_at"] = int(time.time()) + int(out["expires_in"])
+    return out
+
+
 def exchange_code(code: str, code_verifier: str | None = None) -> dict:
     """Exchange an authorization code for token info dict."""
     if code_verifier:
@@ -79,9 +88,10 @@ def exchange_code(code: str, code_verifier: str | None = None) -> dict:
             response = client.post("https://accounts.spotify.com/api/token", data=payload)
             response.raise_for_status()
             token_info = response.json()
-        return token_info
+        return normalize_token_expiry(token_info)
     oauth = build_oauth_manager()
-    return oauth.get_access_token(code, as_dict=True, check_cache=False)
+    raw = oauth.get_access_token(code, as_dict=True, check_cache=False)
+    return normalize_token_expiry(raw)
 
 
 def get_user_client(access_token: str) -> spotipy.Spotify:
@@ -94,9 +104,34 @@ def get_user_client(access_token: str) -> spotipy.Spotify:
     )
 
 
+def refresh_pkce_access_token(refresh_token: str) -> dict:
+    """Refresh tokens issued via PKCE (body params only; no Basic client_secret header)."""
+    payload = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": SPOTIFY_CLIENT_ID,
+    }
+    with httpx.Client(timeout=10) as client:
+        response = client.post(
+            "https://accounts.spotify.com/api/token",
+            data=payload,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response.raise_for_status()
+        return normalize_token_expiry(response.json())
+
+
 def refresh_if_needed(token_info: dict) -> dict:
     """Refresh the access token if expired. Returns updated token_info."""
+    token_info = normalize_token_expiry(token_info)
     oauth = build_oauth_manager()
-    if oauth.is_token_expired(token_info):
-        token_info = oauth.refresh_access_token(token_info["refresh_token"])
-    return token_info
+    expired = "expires_at" not in token_info or oauth.is_token_expired(token_info)
+    if not expired:
+        return token_info
+    refresh_token = token_info.get("refresh_token")
+    if not refresh_token:
+        raise ValueError("Spotify token expired and no refresh_token is stored")
+    updated = refresh_pkce_access_token(refresh_token)
+    if "refresh_token" not in updated:
+        updated["refresh_token"] = refresh_token
+    return updated

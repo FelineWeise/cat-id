@@ -27,6 +27,7 @@ from backend.config import (
     APP_ENV,
     ENABLE_DEBUG_ENDPOINT,
     REDIS_URL,
+    SESSION_COOKIE_SECURE,
     SESSION_STORE_BACKEND,
     SESSION_TTL_SECONDS,
     SPOTIFY_CLIENT_ID,
@@ -109,6 +110,7 @@ SEED_PROFILE_SCORE_WEIGHT = 0.35
 logger = logging.getLogger(__name__)
 _shared_http_client: httpx.AsyncClient | None = None
 session_store = build_session_store(SESSION_STORE_BACKEND, REDIS_URL)
+_EFFECTIVE_SESSION_BACKEND = getattr(session_store, "backend_key", SESSION_STORE_BACKEND)
 _NON_ALNUM = re.compile(r"[^a-z0-9]+", re.I)
 
 
@@ -222,6 +224,12 @@ async def startup_checks() -> None:
         logger.warning(
             "SPOTIFY_REDIRECT_URI is not HTTPS. Spotify may reject authorize requests "
             "with 'redirect_uri: Insecure'."
+        )
+    if APP_ENV == "production" and _EFFECTIVE_SESSION_BACKEND == "memory":
+        logger.warning(
+            "Effective session store is memory in production: OAuth sessions are per-process. "
+            "Use SESSION_STORE_BACKEND=redis and REDIS_URL when running multiple workers or replicas, "
+            "or /api/spotify/status may not see the session after callback."
         )
 
 
@@ -894,6 +902,8 @@ def spotify_oauth_config():
         "redirect_uri": SPOTIFY_REDIRECT_URI,
         "redirect_uri_derived_from_app_base": SPOTIFY_REDIRECT_DERIVED_FROM_APP_BASE,
         "spotify_client_id": SPOTIFY_CLIENT_ID,
+        "session_store_backend": SESSION_STORE_BACKEND,
+        "effective_session_store_backend": _EFFECTIVE_SESSION_BACKEND,
     }
 
 
@@ -904,8 +914,12 @@ def spotify_login():
     verifier, challenge = build_pkce_pair()
     url = get_authorize_url_pkce(state=state, code_challenge=challenge)
     resp = RedirectResponse(url=url)
-    resp.set_cookie("sp_state", state, httponly=True, secure=True, samesite="lax", max_age=300)
-    resp.set_cookie("sp_code_verifier", verifier, httponly=True, secure=True, samesite="lax", max_age=300)
+    resp.set_cookie(
+        "sp_state", state, httponly=True, secure=SESSION_COOKIE_SECURE, samesite="lax", max_age=300,
+    )
+    resp.set_cookie(
+        "sp_code_verifier", verifier, httponly=True, secure=SESSION_COOKIE_SECURE, samesite="lax", max_age=300,
+    )
     return resp
 
 
@@ -928,9 +942,11 @@ def spotify_callback(request: Request, code: str = "", error: str = "", state: s
     session_store.set(session_id, token_info, SESSION_TTL_SECONDS)
 
     resp = RedirectResponse(url="/?spotify_connected=1")
-    resp.set_cookie("sp_session", session_id, httponly=True, secure=True, samesite="lax", max_age=3600)
-    resp.delete_cookie("sp_state")
-    resp.delete_cookie("sp_code_verifier")
+    resp.set_cookie(
+        "sp_session", session_id, httponly=True, secure=SESSION_COOKIE_SECURE, samesite="lax", max_age=3600,
+    )
+    resp.delete_cookie("sp_state", httponly=True, secure=SESSION_COOKIE_SECURE, samesite="lax")
+    resp.delete_cookie("sp_code_verifier", httponly=True, secure=SESSION_COOKIE_SECURE, samesite="lax")
     return resp
 
 
@@ -938,9 +954,20 @@ def spotify_callback(request: Request, code: str = "", error: str = "", state: s
 def spotify_status(request: Request):
     """Check whether the user has a valid Spotify session."""
     session_id = request.cookies.get("sp_session", "")
+    if not session_id:
+        return {"connected": False, "reason": "no_session_cookie"}
     token_info = session_store.get(session_id)
     if not token_info:
-        return {"connected": False}
+        logger.warning(
+            "Spotify session cookie present but no store entry (effective_backend=%s). "
+            "Often caused by multiple workers/replicas with in-memory sessions.",
+            _EFFECTIVE_SESSION_BACKEND,
+        )
+        return {
+            "connected": False,
+            "reason": "session_not_in_store",
+            "session_store_backend": _EFFECTIVE_SESSION_BACKEND,
+        }
     try:
         token_info = refresh_if_needed(token_info)
         session_store.set(session_id, token_info, SESSION_TTL_SECONDS)
@@ -948,7 +975,8 @@ def spotify_status(request: Request):
         user = sp.current_user()
         return {"connected": True, "user": user.get("display_name") or user.get("id")}
     except Exception:
-        return {"connected": False}
+        logger.exception("Spotify status: token refresh or API call failed")
+        return {"connected": False, "reason": "spotify_token_invalid"}
 
 
 @app.post("/api/spotify/logout")
@@ -956,7 +984,7 @@ def spotify_logout(request: Request):
     session_id = request.cookies.get("sp_session", "")
     session_store.delete(session_id)
     resp = JSONResponse(content={"ok": True})
-    resp.delete_cookie("sp_session")
+    resp.delete_cookie("sp_session", httponly=True, secure=SESSION_COOKIE_SECURE, samesite="lax")
     return resp
 
 
@@ -1207,7 +1235,7 @@ def add_to_queue(req: QueueRequest, request: Request):
 
     for uri in req.track_uris:
         try:
-            _run_spotify_write_with_retry(lambda: sp.add_to_queue(uri))
+            _run_spotify_write_with_retry(lambda u=uri: sp.add_to_queue(u))
             added += 1
         except Exception as exc:
             recoverable = _is_no_active_device_error(exc) or _is_restricted_device_error(exc)
@@ -1216,7 +1244,7 @@ def add_to_queue(req: QueueRequest, request: Request):
                 recovered_player = True
                 if ok:
                     try:
-                        _run_spotify_write_with_retry(lambda: sp.add_to_queue(uri))
+                        _run_spotify_write_with_retry(lambda u=uri: sp.add_to_queue(u))
                         added += 1
                         continue
                     except Exception as retry_exc:

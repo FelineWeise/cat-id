@@ -52,6 +52,8 @@
     uriCache: "catid.uriCache.v1"
   };
 
+  const FETCH_SAME_ORIGIN = { credentials: "same-origin" };
+
   const CORE_ADVANCED_EXCLUDES = new Set([
     "tempo", "bpm", "popularity", "release_year",
     "instrumentalness", "energy", "danceability",
@@ -65,6 +67,8 @@
     breadcrumbs: [],
     seenTrackKeys: new Set(),
     spotifyConnected: false,
+    /** Last JSON from GET /api/spotify/status (for OAuth return diagnostics). */
+    spotifyLastStatus: null,
     playlists: [],
     board: loadJson(STORAGE_KEYS.board, []),
     uriCache: loadJson(STORAGE_KEYS.uriCache, {}),
@@ -89,6 +93,23 @@
 
   function saveJson(key, value) {
     window.localStorage.setItem(key, JSON.stringify(value));
+  }
+
+  function extractErrorMessage(data) {
+    if (!data || data.detail == null) return "Request failed";
+    const detail = data.detail;
+    if (typeof detail === "string") return detail;
+    if (typeof detail === "object" && detail.message) return String(detail.message);
+    if (typeof detail === "object" && Array.isArray(detail.errors) && detail.errors.length > 0) {
+      const first = detail.errors[0];
+      if (first && typeof first === "object" && first.message) return String(first.message);
+    }
+    return "Request failed";
+  }
+
+  function applyQueueControlsEnabled() {
+    const on = state.spotifyConnected;
+    if (dom.addQueueBtn) dom.addQueueBtn.disabled = !on;
   }
 
   function esc(value) {
@@ -418,25 +439,87 @@
     renderBoard();
   }
 
+  function spotifyOAuthVerifyErrorMessage() {
+    const data = state.spotifyLastStatus || {};
+    const reason = data.reason;
+    const backend = data.session_store_backend;
+    if (reason === "session_not_in_store" && backend === "memory") {
+      return "Login succeeded in the browser, but this server process did not find your session. "
+        + "If the app runs with more than one worker or container, set SESSION_STORE_BACKEND=redis "
+        + "and REDIS_URL so every instance shares sessions, restart, then connect again.";
+    }
+    if (reason === "session_not_in_store") {
+      return "Your session was not found on the server (expired, restarted, or Redis misconfigured). Try Connect Spotify again.";
+    }
+    if (reason === "no_session_cookie") {
+      return "No Spotify session cookie was sent. Use the exact site URL that matches SPOTIFY_REDIRECT_URI "
+        + "(including https), allow cookies for this site, then try Connect Spotify again.";
+    }
+    if (reason === "spotify_token_invalid") {
+      return "Spotify rejected the saved login. Click Connect Spotify again.";
+    }
+    if (reason === "status_fetch_failed") {
+      return "Could not reach /api/spotify/status. Check your network or VPN, then reload.";
+    }
+    return "Could not verify your Spotify session. Open /api/spotify/oauth-config to confirm redirect_uri "
+      + "and session_store_backend, check server logs, then try Connect Spotify again.";
+  }
+
   async function checkSpotify() {
     try {
-      const response = await fetch("/api/spotify/status");
-      const data = await response.json();
+      const response = await fetch("/api/spotify/status", FETCH_SAME_ORIGIN);
+      const data = await response.json().catch(() => ({}));
+      state.spotifyLastStatus = data;
       state.spotifyConnected = data.connected === true;
       dom.loginBtn.classList.toggle("hidden", state.spotifyConnected);
       dom.logoutBtn.classList.toggle("hidden", !state.spotifyConnected);
       dom.spotifyUser.classList.toggle("hidden", !state.spotifyConnected);
-      dom.spotifyUser.textContent = state.spotifyConnected ? data.user || "Spotify connected" : "";
+      dom.spotifyUser.textContent = state.spotifyConnected ? (data.user || "Connected") : "";
       if (state.spotifyConnected) await loadPlaylists();
+      else state.playlists = [];
     } catch (_) {
       state.spotifyConnected = false;
+      state.spotifyLastStatus = { connected: false, reason: "status_fetch_failed" };
+      dom.loginBtn.classList.remove("hidden");
+      dom.logoutBtn.classList.add("hidden");
+      dom.spotifyUser.classList.add("hidden");
+      dom.spotifyUser.textContent = "";
+    }
+    applyQueueControlsEnabled();
+  }
+
+  async function handleOAuthReturnThenStatus() {
+    const params = new URLSearchParams(window.location.search);
+    const connectedFlag = params.get("spotify_connected");
+    const errCode = params.get("spotify_error");
+    if (connectedFlag || errCode) {
+      const path = window.location.pathname || "/";
+      window.history.replaceState({}, "", path + window.location.hash);
+    }
+    await checkSpotify();
+    if (errCode) {
+      const map = {
+        state_mismatch: "Login expired or cookies blocked. Click Connect Spotify again.",
+        token_exchange_failed: "Spotify token exchange failed. Check SPOTIFY_CLIENT_ID, secret, and redirect URI in the dashboard.",
+        access_denied: "Spotify login was cancelled."
+      };
+      setError(map[errCode] || `Spotify login error: ${errCode}`);
+      return;
+    }
+    if (connectedFlag === "1") {
+      if (state.spotifyConnected) {
+        dom.actionStatus.textContent = `Spotify connected${dom.spotifyUser.textContent ? ` as ${dom.spotifyUser.textContent}` : ""}. You can use + Queue and playlists.`;
+        clearError();
+      } else {
+        setError(spotifyOAuthVerifyErrorMessage());
+      }
     }
   }
 
   async function loadPlaylists() {
     if (!state.spotifyConnected) return;
     try {
-      const response = await fetch("/api/spotify/playlists");
+      const response = await fetch("/api/spotify/playlists", FETCH_SAME_ORIGIN);
       if (!response.ok) return;
       const data = await response.json();
       state.playlists = Array.isArray(data) ? data : [];
@@ -467,7 +550,8 @@
     const response = await fetch("/api/similar/unified", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      ...FETCH_SAME_ORIGIN
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -517,6 +601,10 @@
   }
 
   async function queueTrack(uri) {
+    if (!state.spotifyConnected) {
+      dom.actionStatus.textContent = "Connect Spotify first, then use + Queue (uses your account).";
+      return;
+    }
     if (!uri) {
       dom.actionStatus.textContent = "Track has no Spotify URI.";
       return;
@@ -525,10 +613,11 @@
       const response = await fetch("/api/spotify/queue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ track_uris: [uri] })
+        body: JSON.stringify({ track_uris: [uri] }),
+        ...FETCH_SAME_ORIGIN
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.detail?.message || data.detail || "Queue failed");
+      if (!response.ok) throw new Error(extractErrorMessage(data));
       dom.actionStatus.textContent = data.message || "Added to queue.";
     } catch (error) {
       dom.actionStatus.textContent = error.message || "Queue failed";
@@ -536,6 +625,10 @@
   }
 
   async function queueVisible() {
+    if (!state.spotifyConnected) {
+      dom.actionStatus.textContent = "Connect Spotify first, then Add to Queue (uses your account).";
+      return;
+    }
     const uris = filteredTracks().map((track) => (track.spotify_id ? `spotify:track:${track.spotify_id}` : null)).filter(Boolean);
     if (!uris.length) {
       dom.actionStatus.textContent = "No mappable tracks in current view.";
@@ -545,10 +638,11 @@
       const response = await fetch("/api/spotify/queue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ track_uris: uris })
+        body: JSON.stringify({ track_uris: uris }),
+        ...FETCH_SAME_ORIGIN
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.detail?.message || data.detail || "Queue failed");
+      if (!response.ok) throw new Error(extractErrorMessage(data));
       dom.actionStatus.textContent = data.message || `Queued ${uris.length} track(s).`;
     } catch (error) {
       dom.actionStatus.textContent = error.message || "Queue failed";
@@ -561,7 +655,7 @@
     if (state.uriCache[key]) return state.uriCache[key];
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const query = encodeURIComponent(`artist:${item.artist} track:${item.title}`);
-      const response = await fetch(`/api/spotify/search-track?q=${query}`);
+      const response = await fetch(`/api/spotify/search-track?q=${query}`, FETCH_SAME_ORIGIN);
       if (response.status === 429) {
         const retryAfter = Number(response.headers.get("Retry-After") || "1");
         dom.boardStatus.textContent = `Rate limited, waiting ${retryAfter}s...`;
@@ -608,7 +702,8 @@
         const response = await fetch(`/api/spotify/playlists/${playlistId}/tracks`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ track_uris: resolved })
+          body: JSON.stringify({ track_uris: resolved }),
+          ...FETCH_SAME_ORIGIN
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.detail?.message || data.detail || "Could not add tracks");
@@ -621,7 +716,8 @@
             name: (dom.boardPlaylistName.value || "Cat-ID Memory Board").trim(),
             track_uris: resolved,
             public: false
-          })
+          }),
+          ...FETCH_SAME_ORIGIN
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.detail?.message || data.detail || "Could not create playlist");
@@ -771,7 +867,8 @@
   dom.resetFiltersBtn.addEventListener("click", resetFilters);
   dom.loginBtn.addEventListener("click", () => { window.location.href = "/api/spotify/login"; });
   dom.logoutBtn.addEventListener("click", async () => {
-    await fetch("/api/spotify/logout", { method: "POST" });
+    await fetch("/api/spotify/logout", { method: "POST", ...FETCH_SAME_ORIGIN });
+    dom.actionStatus.textContent = "Disconnected from Spotify.";
     await checkSpotify();
   });
   dom.addQueueBtn.addEventListener("click", queueVisible);
@@ -818,5 +915,5 @@
 
   renderBoard();
   renderActiveFilterCount();
-  checkSpotify();
+  handleOAuthReturnThenStatus();
 })();

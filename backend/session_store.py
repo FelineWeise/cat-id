@@ -24,6 +24,8 @@ class _MemoryItem:
 
 
 class MemorySessionStore(SessionStore):
+    backend_key = "memory"
+
     def __init__(self) -> None:
         self._items: dict[str, _MemoryItem] = {}
 
@@ -49,6 +51,8 @@ class MemorySessionStore(SessionStore):
 
 
 class RedisSessionStore(SessionStore):
+    backend_key = "redis"
+
     def __init__(self, redis_url: str, key_prefix: str = "catid:sess:") -> None:
         import redis
 
