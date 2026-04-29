@@ -1093,6 +1093,16 @@ class PlayRequest(BaseModel):
     uris: list[str] = Field(min_length=1, max_length=50)
 
 
+class ResolveUriItem(BaseModel):
+    key: str = Field(min_length=1, max_length=300)
+    artist: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=200)
+
+
+class ResolveUrisRequest(BaseModel):
+    items: list[ResolveUriItem] = Field(min_length=1, max_length=120)
+
+
 @app.get("/api/spotify/search-track")
 def spotify_search_track(q: str, request: Request):
     sp = _get_user_sp(request)
@@ -1104,6 +1114,41 @@ def spotify_search_track(q: str, request: Request):
     if not track_id:
         return {"spotify_uri": None}
     return {"spotify_uri": f"spotify:track:{track_id}"}
+
+
+def _resolve_spotify_uri(sp, artist: str, title: str) -> str | None:
+    payload = _run_spotify_write_with_retry(
+        lambda: sp.search(
+            q=f"artist:{artist} track:{title}",
+            type="track",
+            limit=1,
+            market="from_token",
+        ),
+        attempts=3,
+    )
+    items = payload.get("tracks", {}).get("items", []) if isinstance(payload, dict) else []
+    if not items:
+        return None
+    track_id = items[0].get("id")
+    return f"spotify:track:{track_id}" if track_id else None
+
+
+@app.post("/api/spotify/resolve-uris")
+async def spotify_resolve_uris(req: ResolveUrisRequest, request: Request):
+    """Resolve many artist/title pairs to Spotify URIs with bounded parallelism."""
+    sp = _get_user_sp(request)
+    semaphore = asyncio.Semaphore(4)
+
+    async def _resolve(item: ResolveUriItem) -> dict[str, str | None]:
+        async with semaphore:
+            try:
+                uri = await asyncio.to_thread(_resolve_spotify_uri, sp, item.artist, item.title)
+            except Exception:
+                uri = None
+            return {"key": item.key, "spotify_uri": uri}
+
+    resolved = await asyncio.gather(*(_resolve(item) for item in req.items))
+    return {"results": resolved}
 
 
 def _session_access_token(request: Request) -> tuple[str, str]:

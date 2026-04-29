@@ -273,6 +273,16 @@
           const data = await response.json().catch(() => ({}));
           if (response.ok) {
             stopFallbackPlayback();
+            state.playerPlaybackState = {
+              paused: false,
+              track_window: {
+                current_track: {
+                  name: track.name || "",
+                  artists: (track.artists || []).map((name) => ({ name }))
+                }
+              }
+            };
+            renderMiniplayerFromState();
             dom.actionStatus.textContent = "Playing in Spotify web player.";
             return;
           }
@@ -372,6 +382,21 @@
 
   function boardKey(item) {
     return `${(item.artist || "").trim().toLowerCase()}::${(item.title || "").trim().toLowerCase()}`;
+  }
+
+  function trackLookupKey(track) {
+    return `${((track?.artists || [])[0] || "").trim().toLowerCase()}::${(track?.name || "").trim().toLowerCase()}`;
+  }
+
+  function knownTrackUri(track) {
+    if (track?.spotify_id) return `spotify:track:${track.spotify_id}`;
+    return state.uriCache[trackLookupKey(track)] || null;
+  }
+
+  function cacheTrackUri(track, uri) {
+    if (!uri || !track) return;
+    state.uriCache[trackLookupKey(track)] = uri;
+    saveJson(STORAGE_KEYS.uriCache, state.uriCache);
   }
 
   function getWeights() {
@@ -903,13 +928,68 @@
     }
   }
 
-  async function queueTrack(uri) {
+  async function resolveTrackUri(track) {
+    const cached = knownTrackUri(track);
+    if (cached) return cached;
+    const artist = ((track?.artists || [])[0] || "").trim();
+    const title = (track?.name || "").trim();
+    if (!artist || !title) return null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const query = encodeURIComponent(`artist:${artist} track:${title}`);
+      const response = await fetch(`/api/spotify/search-track?q=${query}`, FETCH_SAME_ORIGIN);
+      if (response.status === 429) {
+        const retryAfter = Number(response.headers.get("Retry-After") || "1");
+        await new Promise((resolve) => window.setTimeout(resolve, retryAfter * 1000 * (attempt + 1)));
+        continue;
+      }
+      if (!response.ok) return null;
+      const data = await response.json().catch(() => ({}));
+      if (!data.spotify_uri) return null;
+      cacheTrackUri(track, data.spotify_uri);
+      return data.spotify_uri;
+    }
+    return null;
+  }
+
+  async function resolveUrisBatch(tracks) {
+    const pending = [];
+    const seen = new Set();
+    tracks.forEach((track) => {
+      if (knownTrackUri(track)) return;
+      const key = trackLookupKey(track);
+      if (!key || seen.has(key)) return;
+      const artist = ((track.artists || [])[0] || "").trim();
+      const title = (track.name || "").trim();
+      if (!artist || !title) return;
+      seen.add(key);
+      pending.push({ key, artist, title });
+    });
+    if (!pending.length) return;
+    const response = await fetch("/api/spotify/resolve-uris", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: pending }),
+      ...FETCH_SAME_ORIGIN
+    });
+    if (!response.ok) return;
+    const data = await response.json().catch(() => ({}));
+    const results = Array.isArray(data.results) ? data.results : [];
+    const byKey = new Map(tracks.map((track) => [trackLookupKey(track), track]));
+    results.forEach((entry) => {
+      if (!entry?.key || !entry?.spotify_uri) return;
+      const track = byKey.get(entry.key);
+      if (track) cacheTrackUri(track, entry.spotify_uri);
+    });
+  }
+
+  async function queueTrack(track) {
     if (!state.spotifyConnected) {
       dom.actionStatus.textContent = "Connect Spotify first, then use + Queue (uses your account).";
       return;
     }
+    const uri = await resolveTrackUri(track);
     if (!uri) {
-      dom.actionStatus.textContent = "Track has no Spotify URI.";
+      dom.actionStatus.textContent = "Could not map this track to Spotify.";
       return;
     }
     await primeWebPlayerForQueue();
@@ -933,7 +1013,10 @@
       dom.actionStatus.textContent = "Connect Spotify first, then Add to Queue (uses your account).";
       return;
     }
-    const uris = filteredTracks().map((track) => (track.spotify_id ? `spotify:track:${track.spotify_id}` : null)).filter(Boolean);
+    const tracks = filteredTracks();
+    await resolveUrisBatch(tracks);
+    const uris = tracks.map((track) => knownTrackUri(track)).filter(Boolean);
+    const unresolvedCount = tracks.length - uris.length;
     if (!uris.length) {
       dom.actionStatus.textContent = "No mappable tracks in current view.";
       return;
@@ -948,7 +1031,9 @@
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(extractErrorMessage(data));
-      dom.actionStatus.textContent = data.message || `Queued ${uris.length} track(s).`;
+      dom.actionStatus.textContent = unresolvedCount > 0
+        ? `Queued ${uris.length} track(s), ${unresolvedCount} could not be mapped to Spotify URIs.`
+        : (data.message || `Queued ${uris.length} track(s).`);
     } catch (error) {
       dom.actionStatus.textContent = error.message || "Queue failed";
     }
@@ -1080,7 +1165,7 @@
       return;
     }
     if (target.dataset.action === "queue") {
-      queueTrack(track.spotify_id ? `spotify:track:${track.spotify_id}` : "");
+      queueTrack(track);
       return;
     }
     if (target.dataset.action === "board") {
@@ -1190,7 +1275,13 @@
       renderMiniplayerFromState();
       return;
     }
-    if (state.webPlayer) state.webPlayer.togglePlay();
+    if (state.webPlayer) {
+      if (state.playerPlaybackState) {
+        state.playerPlaybackState = { ...state.playerPlaybackState, paused: !state.playerPlaybackState.paused };
+        renderMiniplayerFromState();
+      }
+      state.webPlayer.togglePlay();
+    }
   });
   dom.addQueueBtn.addEventListener("click", queueVisible);
 
