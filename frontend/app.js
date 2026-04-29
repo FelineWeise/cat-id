@@ -28,6 +28,11 @@
     loginBtn: byId("spotify-login-btn"),
     logoutBtn: byId("spotify-logout-btn"),
     spotifyUser: byId("spotify-user"),
+    spotifyMiniplayer: byId("spotify-miniplayer"),
+    miniplayerTitle: byId("miniplayer-title"),
+    miniplayerArtist: byId("miniplayer-artist"),
+    miniplayerToggle: byId("miniplayer-toggle"),
+    miniplayerStatus: byId("miniplayer-status"),
     addQueueBtn: byId("add-queue-btn"),
     actionStatus: byId("action-status"),
     actionsBar: byId("actions-bar"),
@@ -54,6 +59,240 @@
 
   const FETCH_SAME_ORIGIN = { credentials: "same-origin" };
 
+  let spotifySdkLoadPromise = null;
+  let webPlayerInitPromise = null;
+
+  function setMiniplayerShellVisible(visible) {
+    document.body.classList.toggle("miniplayer-visible", visible);
+    if (dom.spotifyMiniplayer) dom.spotifyMiniplayer.classList.toggle("hidden", !visible);
+  }
+
+  function syncMiniplayerVisibility() {
+    setMiniplayerShellVisible(Boolean(state.spotifyConnected || state.fallbackNowPlaying));
+  }
+
+  function setMiniplayerStatus(message) {
+    if (dom.miniplayerStatus) dom.miniplayerStatus.textContent = message || "";
+  }
+
+  function loadSpotifySdk() {
+    if (window.Spotify) return Promise.resolve();
+    if (spotifySdkLoadPromise) return spotifySdkLoadPromise;
+    spotifySdkLoadPromise = new Promise((resolve) => {
+      window.onSpotifyWebPlaybackSDKReady = () => resolve();
+      const script = document.createElement("script");
+      script.src = "https://sdk.scdn.co/spotify-player.js";
+      script.async = true;
+      document.head.appendChild(script);
+    });
+    return spotifySdkLoadPromise;
+  }
+
+  function renderMiniplayerFromState() {
+    if (!dom.miniplayerTitle || !dom.miniplayerArtist || !dom.miniplayerToggle) return;
+    if (state.fallbackNowPlaying) {
+      dom.miniplayerTitle.textContent = state.fallbackNowPlaying.name || "—";
+      dom.miniplayerArtist.textContent = (state.fallbackNowPlaying.artists || []).join(", ");
+      dom.miniplayerToggle.textContent = state.fallbackAudio?.paused ? "▶" : "❚❚";
+      syncMiniplayerVisibility();
+      return;
+    }
+    const playback = state.playerPlaybackState;
+    const track = playback?.track_window?.current_track;
+    if (track) {
+      dom.miniplayerTitle.textContent = track.name || "—";
+      const artists = Array.isArray(track.artists) ? track.artists.map((a) => a.name).filter(Boolean) : [];
+      dom.miniplayerArtist.textContent = artists.join(", ");
+      dom.miniplayerToggle.textContent = playback.paused ? "▶" : "❚❚";
+    } else {
+      dom.miniplayerTitle.textContent = "—";
+      dom.miniplayerArtist.textContent = "";
+      dom.miniplayerToggle.textContent = "▶";
+    }
+    syncMiniplayerVisibility();
+  }
+
+  function stopFallbackPlayback() {
+    if (!state.fallbackAudio) return;
+    try {
+      state.fallbackAudio.pause();
+    } catch (_) {}
+    state.fallbackAudio = null;
+    state.fallbackNowPlaying = null;
+    renderMiniplayerFromState();
+  }
+
+  function getFallbackOpenUrl(track) {
+    const links = track?.external_links || {};
+    return links.deezer || links.youtube || links.soundcloud || track?.spotify_url || "";
+  }
+
+  async function playFallbackPreview(track) {
+    const previewUrl = track?.preview_url || "";
+    if (!previewUrl) return false;
+    stopFallbackPlayback();
+    const audio = new Audio(previewUrl);
+    audio.preload = "auto";
+    state.fallbackAudio = audio;
+    state.fallbackNowPlaying = {
+      name: track.name || "Preview",
+      artists: Array.isArray(track.artists) ? track.artists : [],
+    };
+    audio.addEventListener("ended", () => {
+      stopFallbackPlayback();
+      setMiniplayerStatus("Preview ended.");
+    });
+    audio.addEventListener("error", () => {
+      stopFallbackPlayback();
+      setMiniplayerStatus("Preview could not be played.");
+    });
+    renderMiniplayerFromState();
+    try {
+      await audio.play();
+      setMiniplayerStatus("Playing Deezer preview fallback.");
+      return true;
+    } catch (_) {
+      stopFallbackPlayback();
+      return false;
+    }
+  }
+
+  async function teardownWebPlayer() {
+    webPlayerInitPromise = null;
+    state.playerPlaybackState = null;
+    state.webPlayerDeviceId = null;
+    if (state.webPlayer) {
+      try {
+        state.webPlayer.disconnect();
+      } catch (_) {}
+      state.webPlayer = null;
+    }
+    renderMiniplayerFromState();
+  }
+
+  function waitForWebPlayerDevice(timeoutMs) {
+    return new Promise((resolve) => {
+      if (state.webPlayerDeviceId) {
+        resolve(true);
+        return;
+      }
+      const start = Date.now();
+      const tick = () => {
+        if (state.webPlayerDeviceId) {
+          resolve(true);
+          return;
+        }
+        if (Date.now() - start >= timeoutMs) {
+          resolve(false);
+          return;
+        }
+        window.setTimeout(tick, 120);
+      };
+      tick();
+    });
+  }
+
+  async function initWebPlayer() {
+    if (!state.spotifyConnected) return;
+    if (state.webPlayer) return;
+    if (webPlayerInitPromise) return webPlayerInitPromise;
+    webPlayerInitPromise = (async () => {
+      try {
+        await loadSpotifySdk();
+        if (!window.Spotify || !state.spotifyConnected) return;
+        const player = new window.Spotify.Player({
+          name: "Cat ID",
+          getOAuthToken: (cb) => {
+            fetch("/api/spotify/player-token", FETCH_SAME_ORIGIN)
+              .then((res) => res.json())
+              .then((data) => cb(data.access_token || ""))
+              .catch(() => cb(""));
+          },
+          volume: 0.85
+        });
+        state.webPlayer = player;
+        player.addListener("ready", ({ device_id: deviceId }) => {
+          state.webPlayerDeviceId = deviceId;
+          setMiniplayerStatus("In-browser player ready — Play uses this device; + Queue targets it when open.");
+          renderMiniplayerFromState();
+        });
+        player.addListener("not_ready", ({ device_id: deviceId }) => {
+          if (state.webPlayerDeviceId === deviceId) state.webPlayerDeviceId = null;
+        });
+        player.addListener("player_state_changed", (playbackState) => {
+          state.playerPlaybackState = playbackState;
+          renderMiniplayerFromState();
+        });
+        player.addListener("authentication_error", ({ message }) => {
+          setMiniplayerStatus(message || "Web player auth error — reconnect Spotify.");
+        });
+        player.addListener("initialization_error", ({ message }) => {
+          setMiniplayerStatus(message || "Web player failed (Spotify Premium required for in-browser playback).");
+        });
+        const connected = await player.connect();
+        if (!connected) setMiniplayerStatus("Could not connect in-browser player.");
+      } finally {
+        webPlayerInitPromise = null;
+      }
+    })();
+    return webPlayerInitPromise;
+  }
+
+  function queueRequestPayload(trackUris) {
+    const payload = { track_uris: trackUris };
+    if (state.webPlayerDeviceId) payload.device_id = state.webPlayerDeviceId;
+    return JSON.stringify(payload);
+  }
+
+  async function ensureWebPlayerDevice() {
+    if (state.webPlayerDeviceId) return true;
+    await initWebPlayer();
+    return waitForWebPlayerDevice(14000);
+  }
+
+  /** Wait briefly for the Web Playback device so + Queue can target it without clicking Play first. */
+  async function primeWebPlayerForQueue() {
+    if (!state.spotifyConnected || state.webPlayerDeviceId) return;
+    await initWebPlayer();
+    await waitForWebPlayerDevice(5000);
+  }
+
+  async function playTrack(track) {
+    if (!track) return;
+    const spotifyUri = track.spotify_id ? `spotify:track:${track.spotify_id}` : "";
+    if (state.spotifyConnected && spotifyUri) {
+      const ready = await ensureWebPlayerDevice();
+      if (ready && state.webPlayerDeviceId) {
+        try {
+          const response = await fetch("/api/spotify/play", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ device_id: state.webPlayerDeviceId, uris: [spotifyUri] }),
+            ...FETCH_SAME_ORIGIN
+          });
+          const data = await response.json().catch(() => ({}));
+          if (response.ok) {
+            stopFallbackPlayback();
+            dom.actionStatus.textContent = "Playing in Spotify web player.";
+            return;
+          }
+          setMiniplayerStatus(extractErrorMessage(data));
+        } catch (_) {}
+      }
+    }
+    if (await playFallbackPreview(track)) {
+      dom.actionStatus.textContent = "Playing fallback preview.";
+      return;
+    }
+    const openUrl = getFallbackOpenUrl(track);
+    if (openUrl) {
+      window.open(openUrl, "_blank", "noopener,noreferrer");
+      dom.actionStatus.textContent = "Opened track in external player.";
+      return;
+    }
+    dom.actionStatus.textContent = "No playable source available for this track.";
+  }
+
   const CORE_ADVANCED_EXCLUDES = new Set([
     "tempo", "bpm", "popularity", "release_year",
     "instrumentalness", "energy", "danceability",
@@ -69,6 +308,11 @@
     spotifyConnected: false,
     /** Last JSON from GET /api/spotify/status (for OAuth return diagnostics). */
     spotifyLastStatus: null,
+    webPlayer: null,
+    webPlayerDeviceId: null,
+    playerPlaybackState: null,
+    fallbackAudio: null,
+    fallbackNowPlaying: null,
     playlists: [],
     board: loadJson(STORAGE_KEYS.board, []),
     uriCache: loadJson(STORAGE_KEYS.uriCache, {}),
@@ -406,7 +650,11 @@
       ? tracks.map((track, index) => {
         const artists = (track.artists || []).join(", ");
         const key = trackKey(track);
-        return `<article class="track-card"><div class="track-info"><div class="name">${index + 1}. ${esc(track.name || "")}</div><div class="detail">${esc(artists)}</div><div class="detail">${esc(track.album || "")}</div></div><div class="track-actions-inline"><button type="button" class="action-btn" data-action="queue" data-track-key="${esc(key)}">+ Queue</button><button type="button" class="action-btn" data-action="board" data-track-key="${esc(key)}">+ Board</button><button type="button" class="action-btn" data-action="drill" data-track-key="${esc(key)}">Drill Down</button>${track.spotify_url ? `<a class="action-btn" href="${esc(track.spotify_url)}" target="_blank" rel="noopener noreferrer">Open</a>` : ""}</div></article>`;
+        const playable = Boolean(track.spotify_id || track.preview_url || getFallbackOpenUrl(track));
+        const playBtn = playable
+          ? `<button type="button" class="action-btn" data-action="play" data-track-key="${esc(key)}">Play</button>`
+          : "";
+        return `<article class="track-card"><div class="track-info"><div class="name">${index + 1}. ${esc(track.name || "")}</div><div class="detail">${esc(artists)}</div><div class="detail">${esc(track.album || "")}</div></div><div class="track-actions-inline">${playBtn}<button type="button" class="action-btn" data-action="queue" data-track-key="${esc(key)}">+ Queue</button><button type="button" class="action-btn" data-action="board" data-track-key="${esc(key)}">+ Board</button><button type="button" class="action-btn" data-action="drill" data-track-key="${esc(key)}">Drill Down</button>${track.spotify_url ? `<a class="action-btn" href="${esc(track.spotify_url)}" target="_blank" rel="noopener noreferrer">Open</a>` : ""}</div></article>`;
       }).join("")
       : "<p>No results found with current filters.</p>";
     dom.discoverMoreBtn.classList.toggle("hidden", !state.lastQueryUrl || state.tracks.length === 0);
@@ -475,8 +723,15 @@
       dom.logoutBtn.classList.toggle("hidden", !state.spotifyConnected);
       dom.spotifyUser.classList.toggle("hidden", !state.spotifyConnected);
       dom.spotifyUser.textContent = state.spotifyConnected ? (data.user || "Connected") : "";
-      if (state.spotifyConnected) await loadPlaylists();
-      else state.playlists = [];
+      if (state.spotifyConnected) {
+        await loadPlaylists();
+        syncMiniplayerVisibility();
+        setMiniplayerStatus("Starting in-browser player…");
+        initWebPlayer().catch(() => {});
+      } else {
+        state.playlists = [];
+        await teardownWebPlayer();
+      }
     } catch (_) {
       state.spotifyConnected = false;
       state.spotifyLastStatus = { connected: false, reason: "status_fetch_failed" };
@@ -484,6 +739,7 @@
       dom.logoutBtn.classList.add("hidden");
       dom.spotifyUser.classList.add("hidden");
       dom.spotifyUser.textContent = "";
+      await teardownWebPlayer();
     }
     applyQueueControlsEnabled();
   }
@@ -508,7 +764,7 @@
     }
     if (connectedFlag === "1") {
       if (state.spotifyConnected) {
-        dom.actionStatus.textContent = `Spotify connected${dom.spotifyUser.textContent ? ` as ${dom.spotifyUser.textContent}` : ""}. You can use + Queue and playlists.`;
+        dom.actionStatus.textContent = `Spotify connected${dom.spotifyUser.textContent ? ` as ${dom.spotifyUser.textContent}` : ""}. Use Play (in-browser), + Queue, or playlists.`;
         clearError();
       } else {
         setError(spotifyOAuthVerifyErrorMessage());
@@ -609,11 +865,12 @@
       dom.actionStatus.textContent = "Track has no Spotify URI.";
       return;
     }
+    await primeWebPlayerForQueue();
     try {
       const response = await fetch("/api/spotify/queue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ track_uris: [uri] }),
+        body: queueRequestPayload([uri]),
         ...FETCH_SAME_ORIGIN
       });
       const data = await response.json().catch(() => ({}));
@@ -634,11 +891,12 @@
       dom.actionStatus.textContent = "No mappable tracks in current view.";
       return;
     }
+    await primeWebPlayerForQueue();
     try {
       const response = await fetch("/api/spotify/queue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ track_uris: uris }),
+        body: queueRequestPayload(uris),
         ...FETCH_SAME_ORIGIN
       });
       const data = await response.json().catch(() => ({}));
@@ -770,6 +1028,10 @@
     if (!target) return;
     const track = state.tracks.find((item) => trackKey(item) === target.dataset.trackKey);
     if (!track) return;
+    if (target.dataset.action === "play") {
+      playTrack(track);
+      return;
+    }
     if (target.dataset.action === "queue") {
       queueTrack(track.spotify_id ? `spotify:track:${track.spotify_id}` : "");
       return;
@@ -867,9 +1129,19 @@
   dom.resetFiltersBtn.addEventListener("click", resetFilters);
   dom.loginBtn.addEventListener("click", () => { window.location.href = "/api/spotify/login"; });
   dom.logoutBtn.addEventListener("click", async () => {
+    await teardownWebPlayer();
     await fetch("/api/spotify/logout", { method: "POST", ...FETCH_SAME_ORIGIN });
     dom.actionStatus.textContent = "Disconnected from Spotify.";
     await checkSpotify();
+  });
+  dom.miniplayerToggle?.addEventListener("click", () => {
+    if (state.fallbackAudio) {
+      if (state.fallbackAudio.paused) state.fallbackAudio.play().catch(() => {});
+      else state.fallbackAudio.pause();
+      renderMiniplayerFromState();
+      return;
+    }
+    if (state.webPlayer) state.webPlayer.togglePlay();
   });
   dom.addQueueBtn.addEventListener("click", queueVisible);
 

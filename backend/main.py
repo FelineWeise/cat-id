@@ -1077,6 +1077,16 @@ def add_tracks_to_playlist(playlist_id: str, req: PlaylistAddTracksRequest, requ
 
 class QueueRequest(BaseModel):
     track_uris: list[str] = Field(min_length=1)
+    device_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description="Web Playback SDK device id; transfer playback here before queuing.",
+    )
+
+
+class PlayRequest(BaseModel):
+    device_id: str = Field(min_length=1, max_length=128)
+    uris: list[str] = Field(min_length=1, max_length=50)
 
 
 @app.get("/api/spotify/search-track")
@@ -1090,6 +1100,32 @@ def spotify_search_track(q: str, request: Request):
     if not track_id:
         return {"spotify_uri": None}
     return {"spotify_uri": f"spotify:track:{track_id}"}
+
+
+def _session_access_token(request: Request) -> tuple[str, str]:
+    """Return (session_id, access_token) after refresh; raises HTTPException if not connected."""
+    session_id = request.cookies.get("sp_session", "")
+    token_info = session_store.get(session_id)
+    if not token_info:
+        raise HTTPException(status_code=401, detail="Not connected to Spotify.")
+    token_info = refresh_if_needed(token_info)
+    session_store.set(session_id, token_info, SESSION_TTL_SECONDS)
+    return session_id, token_info["access_token"]
+
+
+@app.get("/api/spotify/player-token")
+def spotify_player_token(request: Request):
+    """Short-lived access token for the Spotify Web Playback SDK (same-origin only)."""
+    _, access_token = _session_access_token(request)
+    return {"access_token": access_token}
+
+
+@app.post("/api/spotify/play")
+def spotify_start_playback(req: PlayRequest, request: Request):
+    """Start playback on a device (used with the in-browser Web Playback SDK)."""
+    sp = _get_user_sp(request)
+    _run_spotify_write_with_retry(lambda: sp.start_playback(device_id=req.device_id, uris=req.uris))
+    return {"ok": True}
 
 
 def _err_text(exc: Exception) -> str:
@@ -1232,10 +1268,20 @@ def add_to_queue(req: QueueRequest, request: Request):
     errors = []
     added = 0
     recovered_player = False
+    device_id = (req.device_id or "").strip() or None
+
+    if device_id:
+        try:
+            sp.transfer_playback(device_id=device_id, force_play=False)
+        except Exception as exc:
+            logger.info("transfer_playback before queue (device_id=%s): %s", device_id[:8], exc)
+
+    def _add(uri: str, dev: str | None) -> None:
+        _run_spotify_write_with_retry(lambda u=uri, d=dev: sp.add_to_queue(u, device_id=d))
 
     for uri in req.track_uris:
         try:
-            _run_spotify_write_with_retry(lambda u=uri: sp.add_to_queue(u))
+            _add(uri, device_id)
             added += 1
         except Exception as exc:
             recoverable = _is_no_active_device_error(exc) or _is_restricted_device_error(exc)
@@ -1244,7 +1290,7 @@ def add_to_queue(req: QueueRequest, request: Request):
                 recovered_player = True
                 if ok:
                     try:
-                        _run_spotify_write_with_retry(lambda u=uri: sp.add_to_queue(u))
+                        _add(uri, device_id)
                         added += 1
                         continue
                     except Exception as retry_exc:

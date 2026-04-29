@@ -19,7 +19,11 @@ from backend.config import (
 
 logger = logging.getLogger(__name__)
 
-SCOPES = "playlist-modify-public playlist-modify-private playlist-read-private user-modify-playback-state user-read-private"
+SCOPES = (
+    "playlist-modify-public playlist-modify-private playlist-read-private "
+    "user-modify-playback-state user-read-playback-state user-read-private "
+    "streaming"
+)
 
 
 def build_oauth_manager(cache_handler: spotipy.CacheHandler | None = None) -> SpotifyOAuth:
