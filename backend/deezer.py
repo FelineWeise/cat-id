@@ -7,14 +7,14 @@ from backend.http_policy import aget_json_with_policy
 DEEZER_SEARCH = "https://api.deezer.com/search"
 DEEZER_TRACK = "https://api.deezer.com/track"
 _sem = asyncio.Semaphore(8)
-_EMPTY = {"preview": None, "bpm": None, "isrc": None, "link": None}
+_EMPTY = {"preview": None, "bpm": None, "isrc": None, "link": None, "album_art": None}
 logger = logging.getLogger(__name__)
 
 
 async def fetch_track_info(client: httpx.AsyncClient, artist: str, track_name: str) -> dict:
     """Search Deezer for a track and return preview URL + BPM.
 
-    Returns dict with keys: preview (str|None), bpm (float|None), isrc (str|None), link (str|None).
+    Returns dict with keys: preview (str|None), bpm (float|None), isrc (str|None), link (str|None), album_art (str|None).
     """
     async with _sem:
         try:
@@ -32,6 +32,11 @@ async def fetch_track_info(client: httpx.AsyncClient, artist: str, track_name: s
 
             preview = items[0].get("preview") or None
             deezer_link = items[0].get("link") or None
+            album_art = (
+                (items[0].get("album") or {}).get("cover_medium")
+                or (items[0].get("album") or {}).get("cover")
+                or None
+            )
             track_id = items[0].get("id")
             bpm = None
             isrc = None
@@ -51,7 +56,7 @@ async def fetch_track_info(client: httpx.AsyncClient, artist: str, track_name: s
                 else:
                     bpm = None
 
-            return {"preview": preview, "bpm": bpm, "isrc": isrc, "link": deezer_link}
+            return {"preview": preview, "bpm": bpm, "isrc": isrc, "link": deezer_link, "album_art": album_art}
         except Exception:
             logger.warning("Deezer lookup failed for '%s - %s'", artist, track_name, exc_info=True)
             return _EMPTY

@@ -287,6 +287,8 @@ async def _enrich_lastfm(
     seed.tags = seed_tags
     if not seed.preview_url:
         seed.preview_url = seed_deezer.get("preview")
+    if not seed.album_art:
+        seed.album_art = seed_deezer.get("album_art")
 
     seed_tag_list = [normalize_tag(tag) for tag in seed_tags]
 
@@ -426,6 +428,8 @@ async def _enrich_lastfm(
             sp_track.mapping_source = mapping_source
             if not sp_track.preview_url:
                 sp_track.preview_url = dz_info.get("preview")
+            if not sp_track.album_art:
+                sp_track.album_art = dz_info.get("album_art")
             return sp_track
 
         external_links: dict[str, str] = {}
@@ -452,7 +456,7 @@ async def _enrich_lastfm(
             name=track_name,
             artists=[artist_name],
             album="",
-            album_art=item.get("image"),
+            album_art=dz_info.get("album_art") or item.get("image"),
             preview_url=dz_info.get("preview"),
             spotify_url=None,
             match_score=fused_score,

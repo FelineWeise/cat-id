@@ -432,6 +432,12 @@
     return payload;
   }
 
+  function getDiscoverExcludeKeys() {
+    const keys = Array.from(state.seenTrackKeys);
+    // Keep exclusion bounded so Discover More does not starve on very long sessions.
+    return keys.slice(-200);
+  }
+
   function activeFilterCount() {
     const core = getCoreFilterValues();
     let count = 0;
@@ -465,6 +471,21 @@
     const bpm = state.seed.bpm != null ? ` · ${Math.round(state.seed.bpm)} BPM` : "";
     dom.seedTrack.innerHTML = `<strong>Seed:</strong> ${esc(artists)} - ${esc(state.seed.name || "")}${esc(bpm)}`;
     dom.seedTrack.classList.remove("hidden");
+  }
+
+  function getTrackArtworkUrl(track) {
+    if (track?.album_art) return String(track.album_art);
+    const links = track?.external_links || {};
+    if (links.spotify_image) return String(links.spotify_image);
+    if (links.deezer_image) return String(links.deezer_image);
+    return "";
+  }
+
+  function trackInitials(track) {
+    const name = String(track?.name || "").trim();
+    if (!name) return "♪";
+    const parts = name.split(/\s+/).slice(0, 2);
+    return parts.map((p) => p[0]).join("").toUpperCase();
   }
 
   function renderBreadcrumbs() {
@@ -650,11 +671,15 @@
       ? tracks.map((track, index) => {
         const artists = (track.artists || []).join(", ");
         const key = trackKey(track);
+        const art = getTrackArtworkUrl(track);
+        const artwork = art
+          ? `<img class="track-thumb" src="${esc(art)}" alt="${esc(track.name || "Track")} cover" loading="lazy" />`
+          : `<div class="track-thumb track-thumb-placeholder" aria-hidden="true">${esc(trackInitials(track))}</div>`;
         const playable = Boolean(track.spotify_id || track.preview_url || getFallbackOpenUrl(track));
         const playBtn = playable
           ? `<button type="button" class="action-btn" data-action="play" data-track-key="${esc(key)}">Play</button>`
           : "";
-        return `<article class="track-card"><div class="track-info"><div class="name">${index + 1}. ${esc(track.name || "")}</div><div class="detail">${esc(artists)}</div><div class="detail">${esc(track.album || "")}</div></div><div class="track-actions-inline">${playBtn}<button type="button" class="action-btn" data-action="queue" data-track-key="${esc(key)}">+ Queue</button><button type="button" class="action-btn" data-action="board" data-track-key="${esc(key)}">+ Board</button><button type="button" class="action-btn" data-action="drill" data-track-key="${esc(key)}">Drill Down</button>${track.spotify_url ? `<a class="action-btn" href="${esc(track.spotify_url)}" target="_blank" rel="noopener noreferrer">Open</a>` : ""}</div></article>`;
+        return `<article class="track-card"><div class="track-media">${artwork}</div><div class="track-info"><div class="name">${index + 1}. ${esc(track.name || "")}</div><div class="detail">${esc(artists)}</div><div class="detail">${esc(track.album || "")}</div></div><div class="track-actions-inline">${playBtn}<button type="button" class="action-btn" data-action="queue" data-track-key="${esc(key)}">+ Queue</button><button type="button" class="action-btn" data-action="board" data-track-key="${esc(key)}">+ Board</button><button type="button" class="action-btn" data-action="drill" data-track-key="${esc(key)}">Drill Down</button>${track.spotify_url ? `<a class="action-btn" href="${esc(track.spotify_url)}" target="_blank" rel="noopener noreferrer">Open</a>` : ""}</div></article>`;
       }).join("")
       : "<p>No results found with current filters.</p>";
     dom.discoverMoreBtn.classList.toggle("hidden", !state.lastQueryUrl || state.tracks.length === 0);
@@ -794,14 +819,26 @@
   }
 
   async function fetchUnified(queryUrl, options = {}) {
+    const useBackendFilters = options.useBackendFilters !== false;
+    const limitMultiplier = Number(options.limitMultiplier || 1);
+    const effectiveLimit = Math.max(1, Math.round(Number(dom.limit?.value || 20) * limitMultiplier));
     const payload = {
       url: queryUrl,
-      limit: Number(dom.limit?.value || 20),
+      limit: effectiveLimit,
       exclude: options.exclude ?? [],
       strict_mapped_only: false,
       use_metadata_fallback: true,
       weights: getWeights(),
-      filters: getBackendFiltersPayload()
+      filters: useBackendFilters ? getBackendFiltersPayload() : {
+        bpm_min: null,
+        bpm_max: null,
+        popularity_min: 0,
+        popularity_max: 100,
+        release_year_min: 1900,
+        release_year_max: 2100,
+        tags_any: [],
+        require_instrumental: null
+      }
     };
     const response = await fetch("/api/similar/unified", {
       method: "POST",
@@ -849,6 +886,16 @@
       renderBreadcrumbs();
       renderActiveFilterCount();
       renderResults();
+      if (options.append) {
+        const visible = filteredTracks().length;
+        if (incoming.length > 0 && visible === 0) {
+          dom.actionStatus.textContent = "Loaded more tracks, but current filters hide them all. Relax filters or Reset to reveal new matches.";
+        } else if (incoming.length === 0) {
+          dom.actionStatus.textContent = "No additional tracks were found for this seed.";
+        } else {
+          dom.actionStatus.textContent = `Loaded ${incoming.length} more candidate tracks.`;
+        }
+      }
     } catch (error) {
       setError(error.message || "Search failed");
     } finally {
@@ -1062,7 +1109,9 @@
   dom.discoverMoreBtn.addEventListener("click", () => runSearch(state.lastQueryUrl || dom.urlInput.value.trim(), {
     append: true,
     skipBreadcrumbPush: true,
-    exclude: Array.from(state.seenTrackKeys)
+    useBackendFilters: false,
+    limitMultiplier: 2,
+    exclude: getDiscoverExcludeKeys()
   }));
   dom.results.addEventListener("click", onResultsClick);
   dom.quickFilters.addEventListener("click", (event) => {
