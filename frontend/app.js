@@ -245,9 +245,10 @@
     return webPlayerInitPromise;
   }
 
-  function queueRequestPayload(trackUris) {
+  function queueRequestPayload(trackUris, options = {}) {
+    const { preferWebPlayer = false } = options;
     const payload = { track_uris: trackUris };
-    if (state.webPlayerDeviceId) payload.device_id = state.webPlayerDeviceId;
+    if (preferWebPlayer && state.webPlayerDeviceId) payload.device_id = state.webPlayerDeviceId;
     return JSON.stringify(payload);
   }
 
@@ -793,12 +794,54 @@
     const response = await fetch("/api/spotify/queue", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: queueRequestPayload([uri]),
+      body: queueRequestPayload([uri], { preferWebPlayer: false }),
       ...FETCH_SAME_ORIGIN
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(extractErrorMessage(data));
     return data;
+  }
+
+  function isQueueRetryableFailure(data) {
+    const detail = data?.detail;
+    if (!detail || typeof detail !== "object") return false;
+    if (detail.retryable === true) return true;
+    const errors = Array.isArray(detail.errors) ? detail.errors : [];
+    return errors.some((err) => {
+      const code = String(err?.code || "");
+      return code === "NO_ACTIVE_DEVICE" || code === "RESTRICTED_DEVICE" || code === "AUTH_REQUIRED";
+    });
+  }
+
+  async function postQueueWithFallback(uris) {
+    const firstResponse = await fetch("/api/spotify/queue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: queueRequestPayload(uris, { preferWebPlayer: false }),
+      ...FETCH_SAME_ORIGIN
+    });
+    const firstData = await firstResponse.json().catch(() => ({}));
+    if (firstResponse.ok) {
+      return { response: firstResponse, data: firstData, usedWebPlayerFallback: false };
+    }
+    if (!isQueueRetryableFailure(firstData)) {
+      throw new Error(extractErrorMessage(firstData));
+    }
+    await primeWebPlayerForQueue();
+    if (!state.webPlayerDeviceId) {
+      throw new Error(extractErrorMessage(firstData));
+    }
+    const fallbackResponse = await fetch("/api/spotify/queue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: queueRequestPayload(uris, { preferWebPlayer: true }),
+      ...FETCH_SAME_ORIGIN
+    });
+    const fallbackData = await fallbackResponse.json().catch(() => ({}));
+    if (!fallbackResponse.ok) {
+      throw new Error(extractErrorMessage(fallbackData));
+    }
+    return { response: fallbackResponse, data: fallbackData, usedWebPlayerFallback: true };
   }
 
   async function resolveQboardUri(item) {
@@ -1201,19 +1244,13 @@
         : "Could not map this track to Spotify; QList updated.";
       return;
     }
-    await primeWebPlayerForQueue();
     try {
-      const response = await fetch("/api/spotify/queue", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: queueRequestPayload([uri]),
-        ...FETCH_SAME_ORIGIN
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(extractErrorMessage(data));
+      const { data, usedWebPlayerFallback } = await postQueueWithFallback([uri]);
       clearQueueFailure(key);
       renderResults();
-      dom.actionStatus.textContent = data.message || "Added to queue.";
+      dom.actionStatus.textContent = usedWebPlayerFallback
+        ? "Added to queue (fallback: Cat ID web player device)."
+        : (data.message || "Added to queue.");
     } catch (error) {
       upsertQboardItem({
         key,
@@ -1236,9 +1273,39 @@
     }
     const tracks = filteredTracks();
     const resolveResult = await resolveUrisBatch(tracks, { statusTarget: "action" });
-    if (resolveResult.failed) return;
+    if (resolveResult.failed) {
+      tracks.forEach((track) => {
+        const key = trackLookupKey(track);
+        upsertQboardItem({
+          key,
+          artist: ((track.artists || [])[0] || "").trim(),
+          title: (track.name || "").trim(),
+          reason: "Spotify URI resolution failed before queueing."
+        });
+        markQueueFailure(key, "Spotify URI resolution failed before queueing.");
+      });
+      renderQboard();
+      renderResults();
+      dom.actionStatus.textContent = "Spotify Q could not be accessed! Temporary QList updated.";
+      return;
+    }
     const uris = tracks.map((track) => knownTrackUri(track)).filter(Boolean);
-    if (resolveResult.rateLimited && !uris.length) return;
+    if (resolveResult.rateLimited && !uris.length) {
+      tracks.forEach((track) => {
+        const key = trackLookupKey(track);
+        upsertQboardItem({
+          key,
+          artist: ((track.artists || [])[0] || "").trim(),
+          title: (track.name || "").trim(),
+          reason: "Spotify is throttling URI resolution."
+        });
+        markQueueFailure(key, "Spotify is throttling URI resolution.");
+      });
+      renderQboard();
+      renderResults();
+      dom.actionStatus.textContent = "Spotify Q could not be accessed! Temporary QList updated.";
+      return;
+    }
     const unresolvedCount = tracks.length - uris.length;
     tracks.forEach((track) => {
       const key = trackLookupKey(track);
@@ -1258,16 +1325,8 @@
       dom.actionStatus.textContent = "No mappable tracks in current view.";
       return;
     }
-    await primeWebPlayerForQueue();
     try {
-      const response = await fetch("/api/spotify/queue", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: queueRequestPayload(uris),
-        ...FETCH_SAME_ORIGIN
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(extractErrorMessage(data));
+      const { data, usedWebPlayerFallback } = await postQueueWithFallback(uris);
       tracks.forEach((track) => {
         const key = trackLookupKey(track);
         if (knownTrackUri(track)) clearQueueFailure(key);
@@ -1277,6 +1336,9 @@
         : (data.message || `Queued ${uris.length} track(s).`);
       if (resolveResult.rateLimited) {
         msg = `${msg} (Spotify was throttling during resolve — try again later for the rest.)`;
+      }
+      if (usedWebPlayerFallback) {
+        msg = `${msg} (fallback target: Cat ID web player device)`;
       }
       renderQboard();
       renderResults();
