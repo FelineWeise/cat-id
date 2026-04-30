@@ -43,6 +43,7 @@
     boardAddVisibleBtn: byId("board-add-visible-btn"),
     boardClearBtn: byId("board-clear-btn"),
     boardCopyBtn: byId("board-copy-btn"),
+    boardPlaylistSource: byId("board-playlist-source"),
     boardPlaylistTarget: byId("board-playlist-target"),
     boardPlaylistName: byId("board-playlist-name"),
     boardExistingPlaylist: byId("board-existing-playlist"),
@@ -782,6 +783,17 @@
     saveJson(STORAGE_KEYS.qboard, state.qboard);
   }
 
+  function queueTrackIntoQlist(track, reason, spotifyUri = null) {
+    const key = trackLookupKey(track);
+    upsertQboardItem({
+      key,
+      artist: ((track?.artists || [])[0] || "").trim(),
+      title: (track?.name || "").trim(),
+      spotifyUri,
+      reason
+    });
+  }
+
   function removeQboardItem(key) {
     state.qboard = state.qboard.filter((item) => item.key !== key);
     saveJson(STORAGE_KEYS.qboard, state.qboard);
@@ -1246,6 +1258,14 @@
     }
     try {
       const { data, usedWebPlayerFallback } = await postQueueWithFallback([uri]);
+      queueTrackIntoQlist(
+        track,
+        usedWebPlayerFallback
+          ? "Queued to Spotify via Cat ID fallback device."
+          : "Queued to Spotify device queue.",
+        uri
+      );
+      renderQboard();
       clearQueueFailure(key);
       renderResults();
       dom.actionStatus.textContent = usedWebPlayerFallback
@@ -1329,7 +1349,17 @@
       const { data, usedWebPlayerFallback } = await postQueueWithFallback(uris);
       tracks.forEach((track) => {
         const key = trackLookupKey(track);
-        if (knownTrackUri(track)) clearQueueFailure(key);
+        const resolvedUri = knownTrackUri(track);
+        if (resolvedUri) {
+          queueTrackIntoQlist(
+            track,
+            usedWebPlayerFallback
+              ? "Queued to Spotify via Cat ID fallback device."
+              : "Queued to Spotify device queue.",
+            resolvedUri
+          );
+          clearQueueFailure(key);
+        }
       });
       let msg = unresolvedCount > 0
         ? `Queued ${uris.length} track(s), ${unresolvedCount} could not be mapped to Spotify URIs.`
@@ -1377,49 +1407,67 @@
     return state.uriCache[key] || null;
   }
 
+  function currentPlaylistSourceItems() {
+    const source = dom.boardPlaylistSource?.value || "memory";
+    if (source === "qlist") {
+      return state.qboard.map((item) => ({
+        key: item.key,
+        artist: String(item.artist || "").trim(),
+        title: String(item.title || "").trim(),
+        spotifyUri: item.spotifyUri || null
+      }));
+    }
+    return state.board.map((item) => ({
+      key: boardKey(item),
+      artist: String(item.artist || "").trim(),
+      title: String(item.title || "").trim(),
+      spotifyUri: item.spotifyUri || null
+    }));
+  }
+
   async function createPlaylistFromBoard() {
     if (!state.spotifyConnected) {
       dom.boardStatus.textContent = "Connect Spotify first.";
       return;
     }
-    if (state.board.length === 0) {
-      dom.boardStatus.textContent = "Memory Board is empty.";
+    const source = dom.boardPlaylistSource?.value || "memory";
+    const sourceName = source === "qlist" ? "QList" : "Memory Board";
+    const sourceItems = currentPlaylistSourceItems().filter((it) => it.key && it.artist && it.title);
+    if (sourceItems.length === 0) {
+      dom.boardStatus.textContent = `${sourceName} is empty.`;
       return;
     }
     const chunkSize = 60;
-    for (let start = 0; start < state.board.length; start += chunkSize) {
-      const slice = state.board.slice(start, start + chunkSize);
+    for (let start = 0; start < sourceItems.length; start += chunkSize) {
+      const slice = sourceItems.slice(start, start + chunkSize);
       const items = slice
-        .map((item) => ({
-          key: boardKey(item),
-          artist: String(item.artist || "").trim(),
-          title: String(item.title || "").trim()
-        }))
-        .filter((it) => it.key && it.artist && it.title);
-      const end = Math.min(start + chunkSize, state.board.length);
-      dom.boardStatus.textContent = `Resolving tracks ${start + 1}–${end} of ${state.board.length}...`;
-      const r = await resolveUriItemsBatch(items, { statusTarget: "board", quiet: true });
-      if (r.rateLimited) {
-        dom.boardStatus.textContent =
-          "Spotify is throttling requests — try again in a few minutes.";
-        return;
-      }
-      if (r.failed) {
-        dom.boardStatus.textContent = "Could not resolve tracks on Spotify. Try again.";
-        return;
+        .filter((it) => !it.spotifyUri && !state.uriCache[it.key])
+        .map((it) => ({ key: it.key, artist: it.artist, title: it.title }));
+      const end = Math.min(start + chunkSize, sourceItems.length);
+      if (items.length) {
+        dom.boardStatus.textContent = `Resolving tracks ${start + 1}–${end} of ${sourceItems.length} from ${sourceName}...`;
+        const r = await resolveUriItemsBatch(items, { statusTarget: "board", quiet: true });
+        if (r.rateLimited) {
+          dom.boardStatus.textContent =
+            "Spotify is throttling requests — try again in a few minutes.";
+          return;
+        }
+        if (r.failed) {
+          dom.boardStatus.textContent = "Could not resolve tracks on Spotify. Try again.";
+          return;
+        }
       }
     }
 
     const resolved = [];
     const unresolved = [];
-    state.board.forEach((item) => {
-      const key = boardKey(item);
-      const uri = item.spotifyUri || state.uriCache[key];
+    sourceItems.forEach((item) => {
+      const uri = item.spotifyUri || state.uriCache[item.key];
       if (uri) resolved.push(uri);
       else unresolved.push(`${item.artist} - ${item.title}`);
     });
     if (resolved.length === 0) {
-      dom.boardStatus.textContent = "No tracks could be resolved to Spotify URIs.";
+      dom.boardStatus.textContent = `No tracks from ${sourceName} could be resolved to Spotify URIs.`;
       return;
     }
     const target = dom.boardPlaylistTarget.value;
@@ -1452,8 +1500,8 @@
         playlistUrl = data.playlist_url || "";
       }
       const message = unresolved.length > 0
-        ? `Playlist updated (${resolved.length} added, ${unresolved.length} unresolved).`
-        : `Playlist updated (${resolved.length} added).`;
+        ? `${sourceName} playlist updated (${resolved.length} added, ${unresolved.length} unresolved).`
+        : `${sourceName} playlist updated (${resolved.length} added).`;
       dom.boardStatus.textContent = message;
       if (playlistUrl) {
         dom.boardStatus.innerHTML = `${esc(message)} <a href="${esc(playlistUrl)}" target="_blank" rel="noopener noreferrer">Open in Spotify</a>`;
