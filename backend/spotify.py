@@ -6,8 +6,11 @@ from functools import lru_cache
 from difflib import SequenceMatcher
 from typing import Literal
 
+import requests
 import spotipy
+from requests.adapters import HTTPAdapter
 from spotipy.oauth2 import SpotifyClientCredentials
+from urllib3.util import Retry
 
 from backend.config import SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
 from backend.models import (
@@ -94,12 +97,28 @@ def get_spotify_client() -> spotipy.Spotify:
             "Spotify credentials not configured. "
             "Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in your .env file."
         )
+    session = requests.Session()
+    retry = Retry(
+        total=6,
+        connect=2,
+        read=False,
+        redirect=False,
+        status=3,
+        backoff_factor=0.35,
+        status_forcelist=(500, 502, 503, 504),
+        allowed_methods=frozenset(["GET", "POST", "PUT", "DELETE"]),
+        respect_retry_after_header=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
     auth_manager = SpotifyClientCredentials(
         client_id=SPOTIFY_CLIENT_ID,
         client_secret=SPOTIFY_CLIENT_SECRET,
     )
     return spotipy.Spotify(
         auth_manager=auth_manager,
+        requests_session=session,
         retries=0,
         status_retries=0,
         backoff_factor=0,

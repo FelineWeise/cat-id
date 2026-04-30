@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from difflib import SequenceMatcher
 
 import httpx
+import requests
 import spotipy
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -108,6 +109,62 @@ DEEZER_SIGNAL_WEIGHT = 0.05
 SEED_PROFILE_SCORE_WEIGHT = 0.35
 
 logger = logging.getLogger(__name__)
+
+# Cap Retry-After we echo to clients (Spotify sometimes returns very large values).
+_SPOTIFY_RETRY_AFTER_HEADER_CAP = 3600
+
+
+def _parse_retry_after_header(headers: dict | None) -> int | None:
+    if not headers:
+        return None
+    raw = headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        return max(1, int(str(raw).strip()))
+    except ValueError:
+        return None
+
+
+def _is_spotify_rate_limit_error(exc: BaseException) -> bool:
+    if isinstance(exc, spotipy.SpotifyException) and getattr(exc, "http_status", None) == 429:
+        return True
+    msg = str(exc).lower()
+    if isinstance(exc, requests.exceptions.RetryError):
+        return "429" in msg or "too many 429" in msg
+    return "429" in msg and "too many" in msg
+
+
+def _single_spotify_search(
+    sp, q: str
+) -> tuple[dict | None, bool, int | None]:
+    """One search call; returns (payload or None, rate_limited, retry_after_seconds or None). Never raises."""
+    try:
+        payload = sp.search(q=q, type="track", limit=1, market="from_token")
+        if isinstance(payload, dict):
+            return payload, False, None
+        return None, False, None
+    except spotipy.SpotifyException as exc:
+        if exc.http_status == 429:
+            ra = _parse_retry_after_header(exc.headers)
+            logger.warning("Spotify search rate limited (spotipy): retry_after=%s", ra)
+            return None, True, ra
+        logger.info("Spotify search failed: %s", exc)
+        return None, False, None
+    except (requests.exceptions.RetryError, OSError) as exc:
+        if _is_spotify_rate_limit_error(exc):
+            logger.warning("Spotify search rate limited (retries exhausted): %s", exc)
+            return None, True, None
+        logger.info("Spotify search error: %s", exc)
+        return None, False, None
+    except Exception as exc:
+        if _is_spotify_rate_limit_error(exc):
+            logger.warning("Spotify search rate limited: %s", exc)
+            return None, True, None
+        logger.info("Spotify search unexpected error: %s", exc)
+        return None, False, None
+
+
 _shared_http_client: httpx.AsyncClient | None = None
 session_store = build_session_store(SESSION_STORE_BACKEND, REDIS_URL)
 _EFFECTIVE_SESSION_BACKEND = getattr(session_store, "backend_key", SESSION_STORE_BACKEND)
@@ -1106,8 +1163,24 @@ class ResolveUrisRequest(BaseModel):
 @app.get("/api/spotify/search-track")
 def spotify_search_track(q: str, request: Request):
     sp = _get_user_sp(request)
-    response = sp.search(q=q, type="track", limit=1, market="from_token")
-    items = response.get("tracks", {}).get("items", [])
+    payload, rate_limited, retry_raw = _single_spotify_search(sp, q)
+    if rate_limited:
+        raw = retry_raw if retry_raw is not None else 60
+        capped = min(raw, _SPOTIFY_RETRY_AFTER_HEADER_CAP)
+        if raw > _SPOTIFY_RETRY_AFTER_HEADER_CAP:
+            logger.warning(
+                "search-track Retry-After from Spotify is %ss; echoing capped %ss to client",
+                raw,
+                capped,
+            )
+        return JSONResponse(
+            status_code=429,
+            content={"spotify_uri": None, "code": "spotify_rate_limited"},
+            headers={"Retry-After": str(capped)},
+        )
+    if not payload:
+        return {"spotify_uri": None}
+    items = payload.get("tracks", {}).get("items", [])
     if not items:
         return {"spotify_uri": None}
     track_id = items[0].get("id")
@@ -1116,39 +1189,51 @@ def spotify_search_track(q: str, request: Request):
     return {"spotify_uri": f"spotify:track:{track_id}"}
 
 
-def _resolve_spotify_uri(sp, artist: str, title: str) -> str | None:
-    payload = _run_spotify_write_with_retry(
-        lambda: sp.search(
-            q=f"artist:{artist} track:{title}",
-            type="track",
-            limit=1,
-            market="from_token",
-        ),
-        attempts=3,
-    )
-    items = payload.get("tracks", {}).get("items", []) if isinstance(payload, dict) else []
+def _resolve_spotify_uri(sp, artist: str, title: str) -> tuple[str | None, bool]:
+    """Resolve one track; returns (uri or None, rate_limited). Never raises."""
+    q = f"artist:{artist} track:{title}"
+    payload, rate_limited, _retry = _single_spotify_search(sp, q)
+    if rate_limited:
+        return None, True
+    if not payload:
+        return None, False
+    items = payload.get("tracks", {}).get("items", [])
     if not items:
-        return None
+        return None, False
     track_id = items[0].get("id")
-    return f"spotify:track:{track_id}" if track_id else None
+    uri = f"spotify:track:{track_id}" if track_id else None
+    return uri, False
 
 
 @app.post("/api/spotify/resolve-uris")
 async def spotify_resolve_uris(req: ResolveUrisRequest, request: Request):
-    """Resolve many artist/title pairs to Spotify URIs with bounded parallelism."""
+    """Resolve many artist/title pairs to Spotify URIs with gentle pacing (fewer 429s)."""
     sp = _get_user_sp(request)
-    semaphore = asyncio.Semaphore(4)
-
-    async def _resolve(item: ResolveUriItem) -> dict[str, str | None]:
-        async with semaphore:
-            try:
-                uri = await asyncio.to_thread(_resolve_spotify_uri, sp, item.artist, item.title)
-            except Exception:
-                uri = None
-            return {"key": item.key, "spotify_uri": uri}
-
-    resolved = await asyncio.gather(*(_resolve(item) for item in req.items))
-    return {"results": resolved}
+    results: list[dict[str, str | None]] = []
+    any_rate_limited = False
+    stopped_rate_limited = False
+    chunk_size = 25
+    for i, item in enumerate(req.items):
+        if stopped_rate_limited:
+            results.append({"key": item.key, "spotify_uri": None})
+            continue
+        uri, rate_limited = await asyncio.to_thread(
+            _resolve_spotify_uri, sp, item.artist, item.title
+        )
+        if rate_limited:
+            any_rate_limited = True
+            stopped_rate_limited = True
+        results.append({"key": item.key, "spotify_uri": uri})
+        if stopped_rate_limited:
+            continue
+        if i + 1 < len(req.items):
+            await asyncio.sleep(0.08)
+        if chunk_size and (i + 1) % chunk_size == 0 and i + 1 < len(req.items):
+            await asyncio.sleep(0.2)
+    out: dict[str, object] = {"results": results}
+    if any_rate_limited:
+        out["meta"] = {"rate_limited": True}
+    return out
 
 
 def _session_access_token(request: Request) -> tuple[str, str]:

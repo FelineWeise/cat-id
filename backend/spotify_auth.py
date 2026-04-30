@@ -8,8 +8,11 @@ import time
 from urllib.parse import urlencode
 
 import httpx
+import requests
 import spotipy
+from requests.adapters import HTTPAdapter
 from spotipy.oauth2 import SpotifyOAuth
+from urllib3.util import Retry
 
 from backend.config import (
     SPOTIFY_CLIENT_ID,
@@ -98,13 +101,43 @@ def exchange_code(code: str, code_verifier: str | None = None) -> dict:
     return normalize_token_expiry(raw)
 
 
+def _spotify_user_http_session() -> requests.Session:
+    """HTTP session for user OAuth calls.
+
+    Spotipy's default urllib3 :class:`spotipy.util.Retry` treats 429 as retryable even when
+    ``retries=0``, which still runs one ``increment()`` per response — logging util warnings
+    and ``Max Retries reached`` for *every* throttled request while not helping quota.
+
+    We use urllib3's plain :class:`~urllib3.util.retry.Retry` with **429 excluded** and
+    ``respect_retry_after_header=False`` so 429 returns immediately to our handlers (no
+    multi-hour sleeps inside urllib3). Transient 5xx still retry a few times.
+    """
+    session = requests.Session()
+    retry = Retry(
+        total=6,
+        connect=2,
+        read=False,
+        redirect=False,
+        status=3,
+        backoff_factor=0.35,
+        status_forcelist=(500, 502, 503, 504),
+        allowed_methods=frozenset(["GET", "POST", "PUT", "DELETE"]),
+        respect_retry_after_header=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
 def get_user_client(access_token: str) -> spotipy.Spotify:
     """Return a Spotify client authenticated with the user's access token."""
     return spotipy.Spotify(
         auth=access_token,
+        requests_session=_spotify_user_http_session(),
+        # Retries are configured on the mounted HTTPAdapter, not Spotipy's default session.
         retries=0,
         status_retries=0,
-        backoff_factor=0,
     )
 
 

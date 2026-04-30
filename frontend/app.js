@@ -928,58 +928,98 @@
     }
   }
 
-  async function resolveTrackUri(track) {
-    const cached = knownTrackUri(track);
-    if (cached) return cached;
-    const artist = ((track?.artists || [])[0] || "").trim();
-    const title = (track?.name || "").trim();
-    if (!artist || !title) return null;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const query = encodeURIComponent(`artist:${artist} track:${title}`);
-      const response = await fetch(`/api/spotify/search-track?q=${query}`, FETCH_SAME_ORIGIN);
-      if (response.status === 429) {
-        const retryAfter = Number(response.headers.get("Retry-After") || "1");
-        await new Promise((resolve) => window.setTimeout(resolve, retryAfter * 1000 * (attempt + 1)));
-        continue;
-      }
-      if (!response.ok) return null;
-      const data = await response.json().catch(() => ({}));
-      if (!data.spotify_uri) return null;
-      cacheTrackUri(track, data.spotify_uri);
-      return data.spotify_uri;
-    }
-    return null;
-  }
-
-  async function resolveUrisBatch(tracks) {
+  async function resolveUriItemsBatch(rawItems, options = {}) {
+    const { statusTarget = "action", quiet = false } = options;
+    const setStatus = (msg) => {
+      if (quiet) return;
+      if (statusTarget === "board") dom.boardStatus.textContent = msg;
+      else dom.actionStatus.textContent = msg;
+    };
     const pending = [];
     const seen = new Set();
+    rawItems.forEach((it) => {
+      const key = it.key;
+      const artist = String(it.artist || "").trim();
+      const title = String(it.title || "").trim();
+      if (!key || !artist || !title) return;
+      if (state.uriCache[key]) return;
+      if (seen.has(key)) return;
+      seen.add(key);
+      pending.push({ key, artist, title });
+    });
+    if (!pending.length) return { rateLimited: false, failed: false };
+
+    const maxPerRequest = 120;
+    let anyRateLimited = false;
+    for (let offset = 0; offset < pending.length; offset += maxPerRequest) {
+      const chunk = pending.slice(offset, offset + maxPerRequest);
+      const response = await fetch("/api/spotify/resolve-uris", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: chunk }),
+        ...FETCH_SAME_ORIGIN
+      });
+      if (response.status === 429) {
+        const retryAfter = Number(response.headers.get("Retry-After") || "60");
+        setStatus(
+          `Spotify rate limit — try again later (wait ~${retryAfter}s or more).`
+        );
+        return { rateLimited: true, failed: false };
+      }
+      if (!response.ok) {
+        setStatus("Could not resolve tracks on Spotify. Try again.");
+        return { rateLimited: false, failed: true };
+      }
+      const data = await response.json().catch(() => ({}));
+      if (data.meta && data.meta.rate_limited) {
+        anyRateLimited = true;
+      }
+      const results = Array.isArray(data.results) ? data.results : [];
+      results.forEach((entry) => {
+        if (!entry || !entry.key || !entry.spotify_uri) return;
+        state.uriCache[entry.key] = entry.spotify_uri;
+      });
+      saveJson(STORAGE_KEYS.uriCache, state.uriCache);
+    }
+    if (anyRateLimited) {
+      setStatus("Spotify is throttling requests — try again in a few minutes.");
+      return { rateLimited: true, failed: false };
+    }
+    return { rateLimited: false, failed: false };
+  }
+
+  async function resolveUrisBatch(tracks, options = {}) {
+    const items = [];
+    const seen = new Set();
     tracks.forEach((track) => {
-      if (knownTrackUri(track)) return;
       const key = trackLookupKey(track);
       if (!key || seen.has(key)) return;
       const artist = ((track.artists || [])[0] || "").trim();
       const title = (track.name || "").trim();
       if (!artist || !title) return;
       seen.add(key);
-      pending.push({ key, artist, title });
+      items.push({ key, artist, title });
     });
-    if (!pending.length) return;
-    const response = await fetch("/api/spotify/resolve-uris", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: pending }),
-      ...FETCH_SAME_ORIGIN
+    return resolveUriItemsBatch(items, options);
+  }
+
+  async function resolveTrackUri(track, batchOptions = {}) {
+    const cached = knownTrackUri(track);
+    if (cached) return { uri: cached, rateLimited: false, failed: false };
+    const artist = ((track?.artists || [])[0] || "").trim();
+    const title = (track?.name || "").trim();
+    if (!artist || !title) return { uri: null, rateLimited: false, failed: false };
+    const key = trackLookupKey(track);
+    const r = await resolveUriItemsBatch([{ key, artist, title }], {
+      statusTarget: "action",
+      quiet: true,
+      ...batchOptions
     });
-    if (!response.ok) return;
-    const data = await response.json().catch(() => ({}));
-    const results = Array.isArray(data.results) ? data.results : [];
-    const byKey = new Map(tracks.map((track) => [trackLookupKey(track), track]));
-    results.forEach((entry) => {
-      if (!entry?.key || !entry?.spotify_uri) return;
-      const track = byKey.get(entry.key);
-      if (track) cacheTrackUri(track, entry.spotify_uri);
-    });
+    return {
+      uri: knownTrackUri(track),
+      rateLimited: r.rateLimited,
+      failed: r.failed
+    };
   }
 
   async function queueTrack(track) {
@@ -987,9 +1027,16 @@
       dom.actionStatus.textContent = "Connect Spotify first, then use + Queue (uses your account).";
       return;
     }
-    const uri = await resolveTrackUri(track);
+    const { uri, rateLimited, failed } = await resolveTrackUri(track);
+    if (rateLimited) {
+      dom.actionStatus.textContent =
+        "Spotify is throttling requests — try again in a few minutes.";
+      return;
+    }
     if (!uri) {
-      dom.actionStatus.textContent = "Could not map this track to Spotify.";
+      dom.actionStatus.textContent = failed
+        ? "Could not reach Spotify to map this track."
+        : "Could not map this track to Spotify.";
       return;
     }
     await primeWebPlayerForQueue();
@@ -1014,8 +1061,10 @@
       return;
     }
     const tracks = filteredTracks();
-    await resolveUrisBatch(tracks);
+    const resolveResult = await resolveUrisBatch(tracks, { statusTarget: "action" });
+    if (resolveResult.failed) return;
     const uris = tracks.map((track) => knownTrackUri(track)).filter(Boolean);
+    if (resolveResult.rateLimited && !uris.length) return;
     const unresolvedCount = tracks.length - uris.length;
     if (!uris.length) {
       dom.actionStatus.textContent = "No mappable tracks in current view.";
@@ -1031,9 +1080,13 @@
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(extractErrorMessage(data));
-      dom.actionStatus.textContent = unresolvedCount > 0
+      let msg = unresolvedCount > 0
         ? `Queued ${uris.length} track(s), ${unresolvedCount} could not be mapped to Spotify URIs.`
         : (data.message || `Queued ${uris.length} track(s).`);
+      if (resolveResult.rateLimited) {
+        msg = `${msg} (Spotify was throttling during resolve — try again later for the rest.)`;
+      }
+      dom.actionStatus.textContent = msg;
     } catch (error) {
       dom.actionStatus.textContent = error.message || "Queue failed";
     }
@@ -1043,23 +1096,15 @@
     if (item.spotifyUri) return item.spotifyUri;
     const key = boardKey(item);
     if (state.uriCache[key]) return state.uriCache[key];
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const query = encodeURIComponent(`artist:${item.artist} track:${item.title}`);
-      const response = await fetch(`/api/spotify/search-track?q=${query}`, FETCH_SAME_ORIGIN);
-      if (response.status === 429) {
-        const retryAfter = Number(response.headers.get("Retry-After") || "1");
-        dom.boardStatus.textContent = `Rate limited, waiting ${retryAfter}s...`;
-        await new Promise((resolve) => window.setTimeout(resolve, retryAfter * 1000 * (attempt + 1)));
-        continue;
-      }
-      if (!response.ok) return null;
-      const data = await response.json().catch(() => ({}));
-      if (!data.spotify_uri) return null;
-      state.uriCache[key] = data.spotify_uri;
-      saveJson(STORAGE_KEYS.uriCache, state.uriCache);
-      return data.spotify_uri;
-    }
-    return null;
+    const artist = String(item.artist || "").trim();
+    const title = String(item.title || "").trim();
+    if (!artist || !title) return null;
+    const r = await resolveUriItemsBatch([{ key, artist, title }], {
+      statusTarget: "board",
+      quiet: true
+    });
+    if (r.rateLimited || r.failed) return null;
+    return state.uriCache[key] || null;
   }
 
   async function createPlaylistFromBoard() {
@@ -1071,15 +1116,38 @@
       dom.boardStatus.textContent = "Memory Board is empty.";
       return;
     }
+    const chunkSize = 60;
+    for (let start = 0; start < state.board.length; start += chunkSize) {
+      const slice = state.board.slice(start, start + chunkSize);
+      const items = slice
+        .map((item) => ({
+          key: boardKey(item),
+          artist: String(item.artist || "").trim(),
+          title: String(item.title || "").trim()
+        }))
+        .filter((it) => it.key && it.artist && it.title);
+      const end = Math.min(start + chunkSize, state.board.length);
+      dom.boardStatus.textContent = `Resolving tracks ${start + 1}–${end} of ${state.board.length}...`;
+      const r = await resolveUriItemsBatch(items, { statusTarget: "board", quiet: true });
+      if (r.rateLimited) {
+        dom.boardStatus.textContent =
+          "Spotify is throttling requests — try again in a few minutes.";
+        return;
+      }
+      if (r.failed) {
+        dom.boardStatus.textContent = "Could not resolve tracks on Spotify. Try again.";
+        return;
+      }
+    }
+
     const resolved = [];
     const unresolved = [];
-    for (let i = 0; i < state.board.length; i += 1) {
-      const item = state.board[i];
-      dom.boardStatus.textContent = `Resolving track ${i + 1} of ${state.board.length}...`;
-      const uri = await resolveUri(item);
+    state.board.forEach((item) => {
+      const key = boardKey(item);
+      const uri = item.spotifyUri || state.uriCache[key];
       if (uri) resolved.push(uri);
       else unresolved.push(`${item.artist} - ${item.title}`);
-    }
+    });
     if (resolved.length === 0) {
       dom.boardStatus.textContent = "No tracks could be resolved to Spotify URIs.";
       return;
