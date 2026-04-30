@@ -1230,9 +1230,17 @@ async def spotify_resolve_uris(req: ResolveUrisRequest, request: Request):
             await asyncio.sleep(0.08)
         if chunk_size and (i + 1) % chunk_size == 0 and i + 1 < len(req.items):
             await asyncio.sleep(0.2)
-    out: dict[str, object] = {"results": results}
-    if any_rate_limited:
-        out["meta"] = {"rate_limited": True}
+    resolved_count = sum(1 for row in results if row.get("spotify_uri"))
+    unresolved_count = len(results) - resolved_count
+    out: dict[str, object] = {
+        "results": results,
+        "meta": {
+            "total": len(results),
+            "resolved": resolved_count,
+            "unresolved": unresolved_count,
+            "rate_limited": any_rate_limited,
+        },
+    }
     return out
 
 

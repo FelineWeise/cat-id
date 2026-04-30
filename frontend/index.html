@@ -44,6 +44,10 @@
             </select>
           </div>
         </form>
+        <div id="loading" class="loading hidden" aria-live="polite">
+          <div class="spinner"></div>
+          <span>Searching for similar tracks&hellip;</span>
+        </div>
 
         <div id="audio-weights" class="audio-weights hidden">
           <label class="weights-heading">Similarity Weights <span class="hint">(dimensions above 30% become recommendation targets)</span></label>
@@ -154,18 +158,32 @@
           </details>
         </section>
 
-        <section id="memory-board-panel" class="surface-card hidden" aria-live="polite">
-          <div class="section-head">
-            <h3>Memory Board (<span id="memory-board-count">0</span>)</h3>
-          </div>
-          <div class="section-actions">
-            <button id="board-add-visible-btn" class="action-btn" type="button">Add All Visible</button>
-            <button id="board-clear-btn" class="action-btn" type="button">Clear All</button>
-            <button id="board-copy-btn" class="action-btn" type="button">Copy as Text</button>
-          </div>
-          <div id="memory-board-list" class="external-queue-list"></div>
-          <div id="memory-board-status" class="action-status"></div>
-        </section>
+        <div class="boards-grid">
+          <section id="memory-board-panel" class="surface-card hidden" aria-live="polite">
+            <div class="section-head">
+              <h3>Memory Board (<span id="memory-board-count">0</span>)</h3>
+            </div>
+            <div class="section-actions">
+              <button id="board-add-visible-btn" class="action-btn" type="button">Add All Visible</button>
+              <button id="board-clear-btn" class="action-btn" type="button">Clear All</button>
+              <button id="board-copy-btn" class="action-btn" type="button">Copy as Text</button>
+            </div>
+            <div id="memory-board-list" class="external-queue-list"></div>
+            <div id="memory-board-status" class="action-status"></div>
+          </section>
+
+          <section id="qboard-panel" class="surface-card hidden" aria-live="polite">
+            <div class="section-head">
+              <h3>QList (<span id="qboard-count">0</span>)</h3>
+            </div>
+            <div class="section-actions">
+              <button id="qboard-retry-btn" class="action-btn" type="button">Retry All</button>
+              <button id="qboard-clear-btn" class="action-btn" type="button">Clear All</button>
+            </div>
+            <div id="qboard-list" class="external-queue-list"></div>
+            <div id="qboard-status" class="action-status"></div>
+          </section>
+        </div>
 
         <section id="playlist-panel" class="surface-card">
           <div class="section-head">
@@ -223,10 +241,6 @@
     </section>
 
     <div id="error" class="error hidden" role="alert"></div>
-    <div id="loading" class="loading hidden" aria-live="polite">
-      <div class="spinner"></div>
-      <span>Searching for similar tracks&hellip;</span>
-    </div>
   </div>
 
   <aside id="spotify-miniplayer" class="spotify-miniplayer hidden" aria-label="Spotify playback">

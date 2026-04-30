@@ -47,6 +47,12 @@
     boardPlaylistName: byId("board-playlist-name"),
     boardExistingPlaylist: byId("board-existing-playlist"),
     boardCreatePlaylistBtn: byId("board-create-playlist-btn"),
+    qboardPanel: byId("qboard-panel"),
+    qboardCount: byId("qboard-count"),
+    qboardList: byId("qboard-list"),
+    qboardStatus: byId("qboard-status"),
+    qboardRetryBtn: byId("qboard-retry-btn"),
+    qboardClearBtn: byId("qboard-clear-btn"),
     drillPanel: byId("drill-panel"),
     drillCloseBtn: byId("drill-close-btn"),
     drillBreadcrumbs: byId("drill-breadcrumbs")
@@ -54,7 +60,8 @@
 
   const STORAGE_KEYS = {
     board: "catid.memoryBoard.v1",
-    uriCache: "catid.uriCache.v1"
+    uriCache: "catid.uriCache.v1",
+    qboard: "catid.qboard.v1"
   };
 
   const FETCH_SAME_ORIGIN = { credentials: "same-origin" };
@@ -325,6 +332,8 @@
     fallbackNowPlaying: null,
     playlists: [],
     board: loadJson(STORAGE_KEYS.board, []),
+    qboard: loadJson(STORAGE_KEYS.qboard, []),
+    queueFailures: {},
     uriCache: loadJson(STORAGE_KEYS.uriCache, {}),
     tagCategories: {},
     filters: {
@@ -335,6 +344,11 @@
     },
     advancedSchema: {}
   };
+  state.qboard.forEach((item) => {
+    if (item?.key && item?.reason && !String(item.reason).toLowerCase().includes("queued successfully")) {
+      state.queueFailures[item.key] = item.reason;
+    }
+  });
 
   function loadJson(key, fallback) {
     try {
@@ -704,7 +718,11 @@
         const playBtn = playable
           ? `<button type="button" class="action-btn" data-action="play" data-track-key="${esc(key)}">Play</button>`
           : "";
-        return `<article class="track-card"><div class="track-media">${artwork}</div><div class="track-info"><div class="name">${index + 1}. ${esc(track.name || "")}</div><div class="detail">${esc(artists)}</div><div class="detail">${esc(track.album || "")}</div></div><div class="track-actions-inline">${playBtn}<button type="button" class="action-btn" data-action="queue" data-track-key="${esc(key)}">+ Queue</button><button type="button" class="action-btn" data-action="board" data-track-key="${esc(key)}">+ Board</button><button type="button" class="action-btn" data-action="drill" data-track-key="${esc(key)}">Drill Down</button>${track.spotify_url ? `<a class="action-btn" href="${esc(track.spotify_url)}" target="_blank" rel="noopener noreferrer">Open</a>` : ""}</div></article>`;
+        const queueFailure = state.queueFailures[key];
+        const failureBadge = queueFailure
+          ? `<span class="queue-fail-badge" title="${esc(queueFailure)}">!</span>`
+          : "";
+        return `<article class="track-card"><div class="track-media">${artwork}</div><div class="track-info"><div class="name">${index + 1}. ${esc(track.name || "")} ${failureBadge}</div><div class="detail">${esc(artists)}</div><div class="detail">${esc(track.album || "")}</div></div><div class="track-actions-inline">${playBtn}<button type="button" class="action-btn" data-action="queue" data-track-key="${esc(key)}">+ Queue</button><button type="button" class="action-btn" data-action="board" data-track-key="${esc(key)}">+ Board</button><button type="button" class="action-btn" data-action="drill" data-track-key="${esc(key)}">Drill Down</button>${track.spotify_url ? `<a class="action-btn" href="${esc(track.spotify_url)}" target="_blank" rel="noopener noreferrer">Open</a>` : ""}</div></article>`;
       }).join("")
       : "<p>No results found with current filters.</p>";
     dom.discoverMoreBtn.classList.toggle("hidden", !state.lastQueryUrl || state.tracks.length === 0);
@@ -735,6 +753,127 @@
     state.board = Array.from(byKey.values());
     saveJson(STORAGE_KEYS.board, state.board);
     renderBoard();
+  }
+
+  function markQueueFailure(key, message) {
+    if (!key) return;
+    state.queueFailures[key] = message || "Queue failed";
+  }
+
+  function clearQueueFailure(key) {
+    if (!key) return;
+    delete state.queueFailures[key];
+  }
+
+  function upsertQboardItem({ key, artist, title, spotifyUri = null, reason = "Queue failed" }) {
+    if (!key || !artist || !title) return;
+    const byKey = new Map(state.qboard.map((item) => [item.key, item]));
+    const current = byKey.get(key) || {};
+    byKey.set(key, {
+      key,
+      artist,
+      title,
+      spotifyUri: spotifyUri || current.spotifyUri || null,
+      reason,
+      createdAt: current.createdAt || new Date().toISOString()
+    });
+    state.qboard = Array.from(byKey.values());
+    saveJson(STORAGE_KEYS.qboard, state.qboard);
+  }
+
+  function removeQboardItem(key) {
+    state.qboard = state.qboard.filter((item) => item.key !== key);
+    saveJson(STORAGE_KEYS.qboard, state.qboard);
+    clearQueueFailure(key);
+    renderQboard();
+    renderResults();
+  }
+
+  async function queueSingleUri(uri) {
+    const response = await fetch("/api/spotify/queue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: queueRequestPayload([uri]),
+      ...FETCH_SAME_ORIGIN
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(extractErrorMessage(data));
+    return data;
+  }
+
+  async function resolveQboardUri(item) {
+    if (item.spotifyUri) return item.spotifyUri;
+    if (state.uriCache[item.key]) return state.uriCache[item.key];
+    const result = await resolveUriItemsBatch([{
+      key: item.key,
+      artist: item.artist,
+      title: item.title
+    }], { statusTarget: "action", quiet: true });
+    if (result.failed || result.rateLimited) return null;
+    return state.uriCache[item.key] || null;
+  }
+
+  async function retryQboardItem(item) {
+    const uri = await resolveQboardUri(item);
+    if (!uri) {
+      upsertQboardItem({ ...item, reason: "Spotify URI could not be resolved." });
+      markQueueFailure(item.key, "Spotify URI could not be resolved.");
+      return false;
+    }
+    try {
+      await primeWebPlayerForQueue();
+      await queueSingleUri(uri);
+      upsertQboardItem({
+        ...item,
+        spotifyUri: uri,
+        reason: "Queued successfully. Remove when done."
+      });
+      clearQueueFailure(item.key);
+      return true;
+    } catch (error) {
+      upsertQboardItem({
+        ...item,
+        spotifyUri: uri,
+        reason: error.message || "Queue failed."
+      });
+      markQueueFailure(item.key, error.message || "Queue failed.");
+      return false;
+    }
+  }
+
+  async function retryAllQboardItems() {
+    if (!state.qboard.length) {
+      dom.qboardStatus.textContent = "QList is empty.";
+      return;
+    }
+    let ok = 0;
+    for (const item of state.qboard) {
+      const success = await retryQboardItem(item);
+      if (success) ok += 1;
+    }
+    saveJson(STORAGE_KEYS.qboard, state.qboard);
+    renderQboard();
+    renderResults();
+    dom.qboardStatus.textContent = `Retried ${state.qboard.length} item(s), ${ok} succeeded.`;
+  }
+
+  function renderQboard() {
+    dom.qboardPanel.classList.remove("hidden");
+    dom.qboardCount.textContent = String(state.qboard.length);
+    dom.qboardList.innerHTML = state.qboard.length > 0
+      ? state.qboard.map((item) => `
+        <div class="queue-item">
+          <div>
+            <strong>${esc(item.artist)} - ${esc(item.title)}</strong>
+            <div class="qboard-reason">${esc(item.reason || "")}</div>
+          </div>
+          <div class="queue-item-actions">
+            <button type="button" class="action-btn" data-qboard-retry="${esc(item.key)}">Retry</button>
+            <button type="button" class="action-btn" data-qboard-remove="${esc(item.key)}">Remove</button>
+          </div>
+        </div>
+      `).join("")
+      : "<p>QList is empty.</p>";
   }
 
   function spotifyOAuthVerifyErrorMessage() {
@@ -1028,15 +1167,38 @@
       return;
     }
     const { uri, rateLimited, failed } = await resolveTrackUri(track);
+    const key = trackLookupKey(track);
+    const artist = ((track?.artists || [])[0] || "").trim();
+    const title = (track?.name || "").trim();
     if (rateLimited) {
+      upsertQboardItem({
+        key,
+        artist,
+        title,
+        spotifyUri: uri,
+        reason: "Spotify is throttling queue access."
+      });
+      markQueueFailure(key, "Spotify is throttling queue access.");
+      renderQboard();
+      renderResults();
       dom.actionStatus.textContent =
-        "Spotify is throttling requests — try again in a few minutes.";
+        "Spotify Q could not be accessed! Temporary QList updated.";
       return;
     }
     if (!uri) {
+      upsertQboardItem({
+        key,
+        artist,
+        title,
+        spotifyUri: null,
+        reason: failed ? "Could not reach Spotify mapping." : "Could not map this track to Spotify."
+      });
+      markQueueFailure(key, failed ? "Could not reach Spotify mapping." : "Could not map this track to Spotify.");
+      renderQboard();
+      renderResults();
       dom.actionStatus.textContent = failed
-        ? "Could not reach Spotify to map this track."
-        : "Could not map this track to Spotify.";
+        ? "Spotify Q could not be accessed! Temporary QList updated."
+        : "Could not map this track to Spotify; QList updated.";
       return;
     }
     await primeWebPlayerForQueue();
@@ -1049,9 +1211,21 @@
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(extractErrorMessage(data));
+      clearQueueFailure(key);
+      renderResults();
       dom.actionStatus.textContent = data.message || "Added to queue.";
     } catch (error) {
-      dom.actionStatus.textContent = error.message || "Queue failed";
+      upsertQboardItem({
+        key,
+        artist,
+        title,
+        spotifyUri: uri,
+        reason: error.message || "Queue failed."
+      });
+      markQueueFailure(key, error.message || "Queue failed.");
+      renderQboard();
+      renderResults();
+      dom.actionStatus.textContent = "Spotify Q could not be accessed! Temporary QList updated.";
     }
   }
 
@@ -1066,7 +1240,21 @@
     const uris = tracks.map((track) => knownTrackUri(track)).filter(Boolean);
     if (resolveResult.rateLimited && !uris.length) return;
     const unresolvedCount = tracks.length - uris.length;
+    tracks.forEach((track) => {
+      const key = trackLookupKey(track);
+      if (!knownTrackUri(track)) {
+        upsertQboardItem({
+          key,
+          artist: ((track.artists || [])[0] || "").trim(),
+          title: (track.name || "").trim(),
+          reason: "Track URI unresolved during queue."
+        });
+        markQueueFailure(key, "Track URI unresolved during queue.");
+      }
+    });
     if (!uris.length) {
+      renderQboard();
+      renderResults();
       dom.actionStatus.textContent = "No mappable tracks in current view.";
       return;
     }
@@ -1080,15 +1268,35 @@
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(extractErrorMessage(data));
+      tracks.forEach((track) => {
+        const key = trackLookupKey(track);
+        if (knownTrackUri(track)) clearQueueFailure(key);
+      });
       let msg = unresolvedCount > 0
         ? `Queued ${uris.length} track(s), ${unresolvedCount} could not be mapped to Spotify URIs.`
         : (data.message || `Queued ${uris.length} track(s).`);
       if (resolveResult.rateLimited) {
         msg = `${msg} (Spotify was throttling during resolve — try again later for the rest.)`;
       }
+      renderQboard();
+      renderResults();
       dom.actionStatus.textContent = msg;
     } catch (error) {
-      dom.actionStatus.textContent = error.message || "Queue failed";
+      tracks.forEach((track) => {
+        const key = trackLookupKey(track);
+        const uri = knownTrackUri(track);
+        upsertQboardItem({
+          key,
+          artist: ((track.artists || [])[0] || "").trim(),
+          title: (track.name || "").trim(),
+          spotifyUri: uri,
+          reason: error.message || "Queue failed."
+        });
+        markQueueFailure(key, error.message || "Queue failed.");
+      });
+      renderQboard();
+      renderResults();
+      dom.actionStatus.textContent = "Spotify Q could not be accessed! Temporary QList updated.";
     }
   }
 
@@ -1379,6 +1587,44 @@
     saveJson(STORAGE_KEYS.board, state.board);
     renderBoard();
   });
+  dom.qboardClearBtn?.addEventListener("click", () => {
+    state.qboard = [];
+    saveJson(STORAGE_KEYS.qboard, state.qboard);
+    Object.keys(state.queueFailures).forEach((key) => delete state.queueFailures[key]);
+    renderQboard();
+    renderResults();
+    dom.qboardStatus.textContent = "QList cleared.";
+  });
+  dom.qboardRetryBtn?.addEventListener("click", () => {
+    retryAllQboardItems().catch(() => {
+      dom.qboardStatus.textContent = "Retry failed. Please try again.";
+    });
+  });
+  dom.qboardList?.addEventListener("click", (event) => {
+    const retryBtn = event.target.closest("[data-qboard-retry]");
+    if (retryBtn) {
+      const item = state.qboard.find((entry) => entry.key === retryBtn.dataset.qboardRetry);
+      if (!item) return;
+      retryQboardItem(item)
+        .then((ok) => {
+          saveJson(STORAGE_KEYS.qboard, state.qboard);
+          renderQboard();
+          renderResults();
+          dom.qboardStatus.textContent = ok
+            ? "Track queued successfully. Remove it manually when done."
+            : "Spotify Q could not be accessed! Temporary QList updated.";
+        })
+        .catch(() => {
+          dom.qboardStatus.textContent = "Retry failed. Please try again.";
+        });
+      return;
+    }
+    const removeBtn = event.target.closest("[data-qboard-remove]");
+    if (removeBtn) {
+      removeQboardItem(removeBtn.dataset.qboardRemove);
+      dom.qboardStatus.textContent = "Removed from QList.";
+    }
+  });
   dom.drillBreadcrumbs.addEventListener("click", (event) => {
     const button = event.target.closest("[data-crumb-index]");
     if (!button) return;
@@ -1394,6 +1640,7 @@
   });
 
   renderBoard();
+  renderQboard();
   renderActiveFilterCount();
   handleOAuthReturnThenStatus();
 })();

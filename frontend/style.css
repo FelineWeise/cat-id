@@ -15,6 +15,14 @@
   --text: #2f241b;
   --text-secondary: #6f6156;
   --radius: 10px;
+  --space-xs: clamp(0.3rem, 0.3vw, 0.45rem);
+  --space-sm: clamp(0.5rem, 0.55vw, 0.75rem);
+  --space-md: clamp(0.75rem, 0.85vw, 1rem);
+  --space-lg: clamp(1rem, 1.25vw, 1.35rem);
+  --font-sm: clamp(0.75rem, 0.75vw, 0.86rem);
+  --font-md: clamp(0.86rem, 0.92vw, 0.98rem);
+  --font-lg: clamp(1rem, 1.1vw, 1.14rem);
+  --control-h: clamp(2rem, 2.3vw, 2.6rem);
 }
 
 body {
@@ -23,6 +31,8 @@ body {
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
+  font-size: var(--font-md);
+  line-height: 1.45;
 }
 
 /* Unified selects — match inputs / secondary buttons */
@@ -421,18 +431,19 @@ body.miniplayer-visible {
 /* ---- Form ---- */
 .input-row {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   align-items: stretch;
 }
 
 #track-url {
   flex: 1;
+  min-height: var(--control-h);
   padding: 0.75rem 1rem;
   border-radius: var(--radius);
   border: 2px solid var(--surface2);
   background: var(--surface);
   color: var(--text);
-  font-size: 1rem;
+  font-size: var(--font-md);
   outline: none;
   transition: border-color 0.2s;
 }
@@ -442,13 +453,14 @@ body.miniplayer-visible {
 }
 
 #search-btn {
-  padding: 0.75rem 1.5rem;
+  min-height: var(--control-h);
+  padding: 0.75rem 1.2rem;
   border: none;
   border-radius: var(--radius);
   background: var(--accent);
   color: #f9f5ef;
   font-weight: 700;
-  font-size: 1rem;
+  font-size: var(--font-md);
   cursor: pointer;
   transition: background 0.2s;
   white-space: nowrap;
@@ -464,13 +476,14 @@ body.miniplayer-visible {
 }
 
 #reload-btn {
-  padding: 0.75rem 1rem;
+  min-height: var(--control-h);
+  padding: 0.7rem 1rem;
   border: 1px solid var(--surface2);
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--text-secondary);
   font-weight: 700;
-  font-size: 0.92rem;
+  font-size: var(--font-sm);
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
@@ -936,12 +949,13 @@ body.miniplayer-visible {
 .action-btn {
   display: inline-flex;
   align-items: center;
+  min-height: calc(var(--control-h) * 0.85);
   padding: 0.45rem 0.85rem;
   border: 1px solid var(--accent);
   border-radius: 20px;
   background: transparent;
   color: var(--accent);
-  font-size: 0.82rem;
+  font-size: var(--font-sm);
   font-weight: 600;
   text-decoration: none;
   cursor: pointer;
@@ -1096,22 +1110,58 @@ body.miniplayer-visible {
 }
 
 .loading {
-  margin-top: 2rem;
-  text-align: center;
+  margin-top: var(--space-sm);
+  margin-bottom: var(--space-sm);
+  text-align: left;
   color: var(--text-secondary);
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
+  justify-content: flex-start;
+  gap: var(--space-sm);
+  font-size: var(--font-sm);
 }
 
 .spinner {
-  width: 24px;
-  height: 24px;
+  width: clamp(16px, 2vw, 22px);
+  height: clamp(16px, 2vw, 22px);
   border: 3px solid var(--surface2);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
+}
+
+.boards-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+.queue-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  justify-content: flex-end;
+}
+
+.qboard-reason {
+  margin-top: 0.2rem;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.queue-fail-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.25rem;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #fff;
+  background: #c14535;
+  vertical-align: middle;
 }
 
 @keyframes spin {
@@ -1405,6 +1455,20 @@ body.miniplayer-visible {
     align-items: stretch;
   }
   .track-actions-inline {
+    justify-content: flex-start;
+  }
+  .boards-grid {
+    grid-template-columns: 1fr;
+  }
+  .section-actions {
+    gap: var(--space-sm);
+  }
+  .queue-item {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .queue-item-actions {
+    width: 100%;
     justify-content: flex-start;
   }
 }
