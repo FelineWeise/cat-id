@@ -1258,7 +1258,7 @@ body.miniplayer-visible {
 
 .app-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 520px);
   gap: 1.4rem;
   align-items: start;
 }
@@ -1388,15 +1388,15 @@ body.miniplayer-visible {
 }
 
 .section-head h3 {
-  font-size: 0.95rem;
+  font-size: 0.88rem;
   color: var(--text-secondary);
 }
 
 .section-actions {
   display: flex;
-  gap: 0.55rem;
+  gap: 0.4rem;
   flex-wrap: wrap;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.6rem;
 }
 
 .playlist-actions {
@@ -1408,11 +1408,13 @@ body.miniplayer-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.7rem;
+  gap: 0.45rem;
   background: var(--bg);
   border-radius: 8px;
-  padding: 0.62rem 0.75rem;
-  margin-bottom: 0.3rem;
+  padding: 0.42rem 0.5rem;
+  margin-bottom: 0.2rem;
+  font-size: 0.8rem;
+  line-height: 1.25;
 }
 
 #memory-board-panel .section-head,
@@ -1422,14 +1424,42 @@ body.miniplayer-visible {
 }
 
 #memory-board-list {
-  margin-top: 0.6rem;
+  margin-top: 0.4rem;
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
+  gap: 0.3rem;
 }
 
 #memory-board-status {
-  margin-top: 0.55rem;
+  margin-top: 0.4rem;
+}
+
+#qboard-list {
+  margin-top: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+#qboard-status {
+  margin-top: 0.4rem;
+}
+
+.queue-item strong {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.queue-item .action-btn {
+  min-height: 1.7rem;
+  padding: 0.26rem 0.5rem;
+  font-size: 0.72rem;
+}
+
+.qboard-reason {
+  margin-top: 0.1rem;
+  font-size: 0.7rem;
+  line-height: 1.2;
 }
 
 @media (max-width: 1100px) {
