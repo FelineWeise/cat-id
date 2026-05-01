@@ -574,6 +574,8 @@ def _mapping_summary(tracks: Sequence[TrackInfo]) -> tuple[int, int]:
 def _blend_track_lists(
     listener_tracks: list[TrackInfo],
     audio_tracks: list[TrackInfo],
+    *,
+    listener_weight: float = 0.55,
 ) -> list[TrackInfo]:
     by_key: dict[str, TrackInfo] = {}
     listener_scores: dict[str, float] = {}
@@ -603,7 +605,9 @@ def _blend_track_lists(
     for key, track in by_key.items():
         ls = listener_scores.get(key, 0.0)
         aps = audio_scores.get(key, 0.0)
-        score = (ls * 0.55) + (aps * 0.45)
+        lw = max(0.0, min(1.0, listener_weight))
+        aw = 1.0 - lw
+        score = (ls * lw) + (aps * aw)
         track.match_score = score
         track.analysis_metrics = {
             **(track.analysis_metrics or {}),
@@ -700,6 +704,22 @@ def _get_mapping_user_sp(request: Request):
         return None
 
 
+def _effective_weights_unified(
+    weights: AudioWeights, instrumental_similarity_only: bool
+) -> AudioWeights:
+    """When instrumental_similarity_only, de-emphasize valence/danceability for audio ranking."""
+    if not instrumental_similarity_only:
+        return weights
+    return AudioWeights(
+        tempo=weights.tempo,
+        energy=weights.energy,
+        valence=0.0,
+        danceability=0.0,
+        acousticness=weights.acousticness,
+        instrumentalness=weights.instrumentalness,
+    )
+
+
 async def _enrich_analysis_metrics(tracks: list[TrackInfo], client: httpx.AsyncClient) -> None:
     async def enrich_single(track: TrackInfo) -> None:
         artist = track.artists[0] if track.artists else ""
@@ -742,16 +762,24 @@ async def api_similar_unified(req: UnifiedSimilarRequest, request: Request):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Last.fm API error: {exc}")
 
+    effective_weights = _effective_weights_unified(
+        req.weights, req.instrumental_similarity_only
+    )
     audio_req = AudioSimilarRequest(
         url=req.url,
         limit=max(req.limit, min(req.limit * 2, 100)),
-        weights=req.weights,
+        weights=effective_weights,
         exclude=req.exclude,
         strict_mapped_only=False,
         use_metadata_fallback=req.use_metadata_fallback,
     )
     audio_response = await _audio_fallback_path(seed, audio_req, request)
-    blended = _blend_track_lists(listener_similar, audio_response.similar_tracks)
+    blend_listener = 0.35 if req.instrumental_similarity_only else 0.55
+    blended = _blend_track_lists(
+        listener_similar,
+        audio_response.similar_tracks,
+        listener_weight=blend_listener,
+    )
 
     all_tags: set[str] = set(seed_tags)
     for t in blended:
@@ -1158,6 +1186,17 @@ class ResolveUriItem(BaseModel):
 
 class ResolveUrisRequest(BaseModel):
     items: list[ResolveUriItem] = Field(min_length=1, max_length=120)
+    use_musicbrainz_first: bool = Field(
+        default=False,
+        description="If true, try MusicBrainz Spotify URL relations before Spotify search (saves quota).",
+    )
+
+
+_SPOTIFY_TRACK_ID_RE = re.compile(r"^[0-9A-Za-z]{22}$")
+
+
+def _valid_spotify_track_id(track_id: str | None) -> bool:
+    return bool(track_id and _SPOTIFY_TRACK_ID_RE.fullmatch(track_id))
 
 
 @app.get("/api/spotify/search-track")
@@ -1213,13 +1252,44 @@ async def spotify_resolve_uris(req: ResolveUrisRequest, request: Request):
     any_rate_limited = False
     stopped_rate_limited = False
     chunk_size = 25
+    mb_resolved = 0
+    spotify_search_resolved = 0
+    mb_errors = 0
+    http_client: httpx.AsyncClient | None = _get_http_client() if req.use_musicbrainz_first else None
+
     for i, item in enumerate(req.items):
         if stopped_rate_limited:
             results.append({"key": item.key, "spotify_uri": None})
             continue
-        uri, rate_limited = await asyncio.to_thread(
-            _resolve_spotify_uri, sp, item.artist, item.title
-        )
+
+        uri: str | None = None
+        rate_limited = False
+
+        if req.use_musicbrainz_first and http_client is not None:
+            mb_id: str | None = None
+            try:
+                mb_id = await fetch_musicbrainz_spotify_relation_id(
+                    http_client,
+                    item.artist,
+                    item.title,
+                    None,
+                )
+            except Exception:
+                mb_errors += 1
+                mb_id = None
+            # MusicBrainz etiquette: ~1 request per second per application.
+            await asyncio.sleep(1.05)
+            if _valid_spotify_track_id(mb_id):
+                uri = f"spotify:track:{mb_id}"
+                mb_resolved += 1
+
+        if uri is None:
+            uri, rate_limited = await asyncio.to_thread(
+                _resolve_spotify_uri, sp, item.artist, item.title
+            )
+            if uri and req.use_musicbrainz_first:
+                spotify_search_resolved += 1
+
         if rate_limited:
             any_rate_limited = True
             stopped_rate_limited = True
@@ -1232,16 +1302,17 @@ async def spotify_resolve_uris(req: ResolveUrisRequest, request: Request):
             await asyncio.sleep(0.2)
     resolved_count = sum(1 for row in results if row.get("spotify_uri"))
     unresolved_count = len(results) - resolved_count
-    out: dict[str, object] = {
-        "results": results,
-        "meta": {
-            "total": len(results),
-            "resolved": resolved_count,
-            "unresolved": unresolved_count,
-            "rate_limited": any_rate_limited,
-        },
+    meta: dict[str, object] = {
+        "total": len(results),
+        "resolved": resolved_count,
+        "unresolved": unresolved_count,
+        "rate_limited": any_rate_limited,
     }
-    return out
+    if req.use_musicbrainz_first:
+        meta["resolved_via_mb"] = mb_resolved
+        meta["resolved_via_spotify_search"] = spotify_search_resolved
+        meta["mb_errors"] = mb_errors
+    return {"results": results, "meta": meta}
 
 
 def _session_access_token(request: Request) -> tuple[str, str]:

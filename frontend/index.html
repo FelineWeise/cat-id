@@ -112,11 +112,17 @@
             <summary>Filters <span id="active-filter-count" class="hint"></span></summary>
 
             <div id="bpm-filter" class="filter-group hidden">
-              <label for="bpm-tolerance">BPM tolerance</label>
+              <label for="bpm-tolerance">BPM tolerance (vs seed)</label>
               <div class="bpm-row">
                 <input type="range" id="bpm-tolerance" min="0" max="100" step="1" value="100" />
                 <span id="bpm-label">Any</span>
               </div>
+              <label class="filter-sub-label" for="bpm-min">BPM range (absolute)</label>
+              <div class="bpm-row">
+                <input type="number" id="bpm-min" min="0" max="400" step="1" placeholder="min" value="" />
+                <input type="number" id="bpm-max" min="0" max="400" step="1" placeholder="max" value="" />
+              </div>
+              <p class="hint">Leave min/max empty to use only seed tolerance. If either min or max is set, absolute range wins over tolerance.</p>
             </div>
 
             <div class="filter-group">
@@ -141,6 +147,11 @@
                 <label><input type="checkbox" id="filter-instrumental-only" /> Instrumental only</label>
                 <label><input type="checkbox" id="filter-vocal-only" /> Vocal only</label>
               </div>
+              <label class="filter-sub-label"><input type="checkbox" id="filter-instrumental-similarity-only" /> Instrumental similarity (de-emphasize valence / danceability in ranking)</label>
+            </div>
+
+            <div class="filter-group">
+              <label><input type="checkbox" id="resolve-uri-mb-first" /> Resolve Spotify URIs via MusicBrainz first (slower, fewer Spotify searches)</label>
             </div>
 
             <div id="tag-filter" class="filter-group hidden">

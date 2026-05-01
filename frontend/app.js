@@ -21,8 +21,12 @@
     bpmFilter: byId("bpm-filter"),
     bpmTolerance: byId("bpm-tolerance"),
     bpmLabel: byId("bpm-label"),
+    bpmMin: byId("bpm-min"),
+    bpmMax: byId("bpm-max"),
     instrumentalOnly: byId("filter-instrumental-only"),
     vocalOnly: byId("filter-vocal-only"),
+    instrumentalSimilarityOnly: byId("filter-instrumental-similarity-only"),
+    resolveUriMbFirst: byId("resolve-uri-mb-first"),
     advancedFilters: byId("advanced-filters"),
     resetFiltersBtn: byId("reset-filters-btn"),
     loginBtn: byId("spotify-login-btn"),
@@ -437,17 +441,29 @@
     return weights;
   }
 
+  function parseOptionalBpmInput(raw) {
+    const s = String(raw ?? "").trim();
+    if (s === "") return null;
+    const n = Number(s);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return n;
+  }
+
   function getCoreFilterValues() {
     const popMin = Number(dom.popularityMin?.value ?? 0);
     const popMax = Number(dom.popularityMax?.value ?? 100);
     const yearMin = Number(dom.releaseYearMin?.value ?? 1900);
     const yearMax = Number(dom.releaseYearMax?.value ?? 2100);
+    const bpmAbsoluteMin = parseOptionalBpmInput(dom.bpmMin?.value);
+    const bpmAbsoluteMax = parseOptionalBpmInput(dom.bpmMax?.value);
     return {
       popMin: Number.isFinite(popMin) ? popMin : 0,
       popMax: Number.isFinite(popMax) ? popMax : 100,
       yearMin: Number.isFinite(yearMin) ? yearMin : 1900,
       yearMax: Number.isFinite(yearMax) ? yearMax : 2100,
       bpmTolerancePct: Number(dom.bpmTolerance?.value ?? 100),
+      bpmAbsoluteMin,
+      bpmAbsoluteMax,
       instrumentalOnly: Boolean(dom.instrumentalOnly?.checked),
       vocalOnly: Boolean(dom.vocalOnly?.checked)
     };
@@ -465,7 +481,18 @@
       tags_any: Array.from(state.filters.selectedTags),
       require_instrumental: core.instrumentalOnly && !core.vocalOnly ? true : (core.vocalOnly && !core.instrumentalOnly ? false : null)
     };
-    if (state.seed?.bpm != null && core.bpmTolerancePct < 100) {
+    const explicitBpm = core.bpmAbsoluteMin != null || core.bpmAbsoluteMax != null;
+    if (explicitBpm) {
+      let lo = core.bpmAbsoluteMin;
+      let hi = core.bpmAbsoluteMax;
+      if (lo != null && hi != null && lo > hi) {
+        const t = lo;
+        lo = hi;
+        hi = t;
+      }
+      payload.bpm_min = lo;
+      payload.bpm_max = hi;
+    } else if (state.seed?.bpm != null && core.bpmTolerancePct < 100) {
       const tolerance = (state.seed.bpm * core.bpmTolerancePct) / 100;
       payload.bpm_min = Math.max(0, state.seed.bpm - tolerance);
       payload.bpm_max = state.seed.bpm + tolerance;
@@ -484,9 +511,12 @@
     let count = 0;
     if (core.popMin > 0 || core.popMax < 100) count += 1;
     if (core.yearMin > 1900 || core.yearMax < 2100) count += 1;
-    if (core.bpmTolerancePct < 100) count += 1;
+    const explicitBpm = core.bpmAbsoluteMin != null || core.bpmAbsoluteMax != null;
+    if (explicitBpm) count += 1;
+    else if (core.bpmTolerancePct < 100) count += 1;
     if (state.filters.selectedTags.size > 0) count += 1;
     if (core.instrumentalOnly || core.vocalOnly) count += 1;
+    if (dom.instrumentalSimilarityOnly?.checked) count += 1;
     Object.values(state.filters.advanced).forEach((value) => {
       if (value == null) return;
       if (typeof value === "object" && ("min" in value || "max" in value)) {
@@ -660,7 +690,13 @@
       const matches = Array.from(state.filters.selectedTags).some((tag) => tags.has(tag));
       if (!matches) return false;
     }
-    if (state.seed?.bpm != null && track.bpm != null && core.bpmTolerancePct < 100) {
+    const explicitBpmRange = core.bpmAbsoluteMin != null || core.bpmAbsoluteMax != null;
+    if (explicitBpmRange) {
+      const b = track.bpm;
+      if (typeof b !== "number" || !Number.isFinite(b)) return false;
+      if (core.bpmAbsoluteMin != null && b < core.bpmAbsoluteMin) return false;
+      if (core.bpmAbsoluteMax != null && b > core.bpmAbsoluteMax) return false;
+    } else if (state.seed?.bpm != null && track.bpm != null && core.bpmTolerancePct < 100) {
       const tolerance = (state.seed.bpm * core.bpmTolerancePct) / 100;
       if (Math.abs(track.bpm - state.seed.bpm) > tolerance) return false;
     }
@@ -923,6 +959,7 @@
             <div class="qboard-reason">${esc(item.reason || "")}</div>
           </div>
           <div class="queue-item-actions">
+            <button type="button" class="action-btn" data-qboard-copy="${esc(item.key)}" title="Copy artist - title">Copy</button>
             <button type="button" class="action-btn" data-qboard-retry="${esc(item.key)}">Retry</button>
             <button type="button" class="action-btn" data-qboard-remove="${esc(item.key)}">Remove</button>
           </div>
@@ -1048,6 +1085,7 @@
       strict_mapped_only: false,
       use_metadata_fallback: true,
       weights: getWeights(),
+      instrumental_similarity_only: Boolean(dom.instrumentalSimilarityOnly?.checked),
       filters: useBackendFilters ? getBackendFiltersPayload() : {
         bpm_min: null,
         bpm_max: null,
@@ -1147,10 +1185,13 @@
     let anyRateLimited = false;
     for (let offset = 0; offset < pending.length; offset += maxPerRequest) {
       const chunk = pending.slice(offset, offset + maxPerRequest);
+      const useMbFirst = typeof options.useMusicbrainzFirst === "boolean"
+        ? options.useMusicbrainzFirst
+        : Boolean(dom.resolveUriMbFirst?.checked);
       const response = await fetch("/api/spotify/resolve-uris", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: chunk }),
+        body: JSON.stringify({ items: chunk, use_musicbrainz_first: useMbFirst }),
         ...FETCH_SAME_ORIGIN
       });
       if (response.status === 429) {
@@ -1511,14 +1552,37 @@
     }
   }
 
+  async function copyPlainTextToClipboard(text) {
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (_) {}
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch (_) {
+      return false;
+    }
+  }
+
   async function copyBoardText() {
     const text = state.board.map((item) => `${item.artist} - ${item.title}`).join("\n");
     if (!text) {
       dom.boardStatus.textContent = "Nothing to copy.";
       return;
     }
-    await navigator.clipboard.writeText(text);
-    dom.boardStatus.textContent = "Copied board tracks as text.";
+    const ok = await copyPlainTextToClipboard(text);
+    dom.boardStatus.textContent = ok ? "Copied board tracks as text." : "Clipboard copy failed.";
   }
 
   function resetFilters() {
@@ -1528,8 +1592,11 @@
     dom.releaseYearMax.value = "2100";
     dom.bpmTolerance.value = "100";
     dom.bpmLabel.textContent = "Any";
+    if (dom.bpmMin) dom.bpmMin.value = "";
+    if (dom.bpmMax) dom.bpmMax.value = "";
     dom.instrumentalOnly.checked = false;
     dom.vocalOnly.checked = false;
+    if (dom.instrumentalSimilarityOnly) dom.instrumentalSimilarityOnly.checked = false;
     state.filters.selectedTags.clear();
     Object.keys(state.filters.advanced).forEach((key) => {
       const def = state.advancedSchema[key];
@@ -1607,7 +1674,7 @@
     renderActiveFilterCount();
     renderResults();
   });
-  [dom.popularityMin, dom.popularityMax, dom.releaseYearMin, dom.releaseYearMax, dom.instrumentalOnly, dom.vocalOnly].forEach((element) => {
+  [dom.popularityMin, dom.popularityMax, dom.releaseYearMin, dom.releaseYearMax, dom.instrumentalOnly, dom.vocalOnly, dom.bpmMin, dom.bpmMax, dom.instrumentalSimilarityOnly].forEach((element) => {
     element?.addEventListener("input", () => {
       renderActiveFilterCount();
       renderResults();
@@ -1711,6 +1778,20 @@
     });
   });
   dom.qboardList?.addEventListener("click", (event) => {
+    const copyLineBtn = event.target.closest("[data-qboard-copy]");
+    if (copyLineBtn) {
+      const key = copyLineBtn.dataset.qboardCopy;
+      const item = state.qboard.find((entry) => entry.key === key);
+      if (!item) {
+        dom.qboardStatus.textContent = "Item not found.";
+        return;
+      }
+      const line = `${item.artist} - ${item.title}`;
+      copyPlainTextToClipboard(line).then((ok) => {
+        dom.qboardStatus.textContent = ok ? "Copied to clipboard." : "Clipboard copy failed.";
+      });
+      return;
+    }
     const retryBtn = event.target.closest("[data-qboard-retry]");
     if (retryBtn) {
       const item = state.qboard.find((entry) => entry.key === retryBtn.dataset.qboardRetry);

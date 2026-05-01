@@ -87,6 +87,10 @@ class UnifiedSimilarRequest(BaseModel):
         default=True,
         description="If true, retry Spotify resolution using free MusicBrainz hints when direct mapping fails.",
     )
+    instrumental_similarity_only: bool = Field(
+        default=False,
+        description="If true, rank audio similarity with valence/danceability zeroed and blend toward audio scores.",
+    )
     filters: SimilarityFilters = Field(default_factory=SimilarityFilters)
 
 
