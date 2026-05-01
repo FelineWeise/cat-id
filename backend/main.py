@@ -740,12 +740,28 @@ async def _enrich_analysis_metrics(tracks: list[TrackInfo], client: httpx.AsyncC
 @app.post("/api/similar/unified", response_model=SimilarTracksResponse)
 async def api_similar_unified(req: UnifiedSimilarRequest, request: Request):
     mapping_user_sp = _get_mapping_user_sp(request)
-    try:
-        seed = await asyncio.to_thread(get_track_info, req.url, mapping_user_sp)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Spotify API error: {exc}")
+    url_clean = req.resolved_spotify_url()
+    if url_clean:
+        try:
+            seed = await asyncio.to_thread(get_track_info, url_clean, mapping_user_sp)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Spotify API error: {exc}")
+    else:
+        artist = (req.seed_artist or "").strip()
+        title = (req.seed_track or "").strip()
+        if not artist or not title:
+            raise HTTPException(
+                status_code=400,
+                detail="seed_artist and seed_track are required when url is empty",
+            )
+        seed = TrackInfo(
+            name=title,
+            artists=[artist],
+            album="",
+            spotify_mapping_status="unmapped",
+        )
 
     exclude = set(req.exclude) if req.exclude else None
     fetch_limit = _listener_fetch_limit(req.limit, req.strict_mapped_only)
@@ -766,7 +782,7 @@ async def api_similar_unified(req: UnifiedSimilarRequest, request: Request):
         req.weights, req.instrumental_similarity_only
     )
     audio_req = AudioSimilarRequest(
-        url=req.url,
+        url=url_clean or "",
         limit=max(req.limit, min(req.limit * 2, 100)),
         weights=effective_weights,
         exclude=req.exclude,

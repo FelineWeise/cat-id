@@ -336,6 +336,8 @@
 
   const state = {
     lastQueryUrl: "",
+    /** @type {{ kind: "url", url: string } | { kind: "metadata", artist: string, track: string } | null} */
+    lastSearchPayload: null,
     seed: null,
     tracks: [],
     breadcrumbs: [],
@@ -771,7 +773,10 @@
         return `<article class="track-card"><div class="track-media">${artwork}</div><div class="track-info"><div class="name">${index + 1}. ${esc(track.name || "")} ${failureBadge}</div><div class="detail">${esc(artists)}</div><div class="detail">${esc(track.album || "")}</div></div><div class="track-actions-inline">${playBtn}<button type="button" class="action-btn" data-action="queue" data-track-key="${esc(key)}">+ Queue</button><button type="button" class="action-btn" data-action="board" data-track-key="${esc(key)}">+ Board</button><button type="button" class="action-btn" data-action="drill" data-track-key="${esc(key)}">Drill Down</button>${track.spotify_url ? `<a class="action-btn" href="${esc(track.spotify_url)}" target="_blank" rel="noopener noreferrer">Open</a>` : ""}</div></article>`;
       }).join("")
       : "<p>No results found with current filters.</p>";
-    dom.discoverMoreBtn.classList.toggle("hidden", !state.lastQueryUrl || state.tracks.length === 0);
+    dom.discoverMoreBtn.classList.toggle(
+      "hidden",
+      !(state.lastSearchPayload || state.lastQueryUrl) || state.tracks.length === 0
+    );
   }
 
   function toBoardItem(track) {
@@ -1087,8 +1092,11 @@
     const useBackendFilters = options.useBackendFilters !== false;
     const limitMultiplier = Number(options.limitMultiplier || 1);
     const effectiveLimit = Math.max(1, Math.round(Number(dom.limit?.value || 20) * limitMultiplier));
+    const seedArtist = String(options.seedArtist || "").trim();
+    const seedTrack = String(options.seedTrack || "").trim();
+    const useMetadataSeed = Boolean(seedArtist && seedTrack);
     const payload = {
-      url: queryUrl,
+      url: useMetadataSeed ? "" : String(queryUrl || "").trim(),
       limit: effectiveLimit,
       exclude: options.exclude ?? [],
       strict_mapped_only: false,
@@ -1106,6 +1114,10 @@
         require_instrumental: null
       }
     };
+    if (useMetadataSeed) {
+      payload.seed_artist = seedArtist;
+      payload.seed_track = seedTrack;
+    }
     const response = await fetch("/api/similar/unified", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1120,7 +1132,11 @@
   }
 
   async function runSearch(queryUrl, options = {}) {
-    if (!queryUrl) return;
+    const seedArtist = String(options.seedArtist || "").trim();
+    const seedTrack = String(options.seedTrack || "").trim();
+    const useMetadataSeed = Boolean(seedArtist && seedTrack);
+    const urlTrim = String(queryUrl || "").trim();
+    if (!urlTrim && !useMetadataSeed) return;
     clearError();
     if (dom.appStatus && !options.append) dom.appStatus.textContent = "";
     dom.loading.classList.remove("hidden");
@@ -1136,12 +1152,22 @@
       }
       state.seed = data.seed_track || state.seed;
       state.tagCategories = data.tag_categories || {};
-      state.lastQueryUrl = queryUrl;
+      if (useMetadataSeed) {
+        state.lastQueryUrl = "";
+        state.lastSearchPayload = { kind: "metadata", artist: seedArtist, track: seedTrack };
+      } else {
+        state.lastQueryUrl = urlTrim;
+        state.lastSearchPayload = { kind: "url", url: urlTrim };
+      }
       state.tracks.forEach((track) => state.seenTrackKeys.add(trackKey(track)));
       if (!options.skipBreadcrumbPush && state.seed) {
         const seedLabel = `${(state.seed.artists || []).join(", ")} - ${state.seed.name || ""}`;
         const last = state.breadcrumbs[state.breadcrumbs.length - 1];
-        if (!last || last.label !== seedLabel) state.breadcrumbs.push({ url: queryUrl, label: seedLabel });
+        if (!last || last.label !== seedLabel) {
+          const crumb = { url: useMetadataSeed ? "" : urlTrim, label: seedLabel };
+          if (useMetadataSeed) crumb.meta = { artist: seedArtist, track: seedTrack };
+          state.breadcrumbs.push(crumb);
+        }
       }
       dom.filterPanel.classList.remove("hidden");
       dom.bpmFilter.classList.toggle("hidden", state.seed?.bpm == null);
@@ -1520,12 +1546,19 @@
       return;
     }
     if (target.dataset.action === "drill") {
-      const nextSeed = track.spotify_url || (track.spotify_id ? `https://open.spotify.com/track/${track.spotify_id}` : "");
-      if (!nextSeed) {
-        setError("Cannot drill down on a track without Spotify ID.");
+      const nextSpotify = track.spotify_url
+        || (track.spotify_id ? `https://open.spotify.com/track/${track.spotify_id}` : "");
+      if (nextSpotify) {
+        runSearch(nextSpotify);
         return;
       }
-      runSearch(nextSeed);
+      const artist = ((track.artists || [])[0] || "").trim();
+      const title = (track.name || "").trim();
+      if (artist && title) {
+        runSearch("", { seedArtist: artist, seedTrack: title });
+        return;
+      }
+      setError("Cannot drill down: need a Spotify link or artist and track name.");
     }
   }
 
@@ -1536,14 +1569,38 @@
     state.seenTrackKeys.clear();
     runSearch(url, { exclude: [] });
   });
-  dom.reloadBtn.addEventListener("click", () => runSearch(state.lastQueryUrl || dom.urlInput.value.trim(), { skipBreadcrumbPush: true }));
-  dom.discoverMoreBtn.addEventListener("click", () => runSearch(state.lastQueryUrl || dom.urlInput.value.trim(), {
-    append: true,
-    skipBreadcrumbPush: true,
-    useBackendFilters: false,
-    limitMultiplier: 2,
-    exclude: getDiscoverExcludeKeys()
-  }));
+  dom.reloadBtn.addEventListener("click", () => {
+    const p = state.lastSearchPayload;
+    if (p?.kind === "metadata") {
+      runSearch("", { seedArtist: p.artist, seedTrack: p.track, skipBreadcrumbPush: true });
+    } else {
+      const url = p?.kind === "url" ? p.url : state.lastQueryUrl || dom.urlInput.value.trim();
+      runSearch(url, { skipBreadcrumbPush: true });
+    }
+  });
+  dom.discoverMoreBtn.addEventListener("click", () => {
+    const p = state.lastSearchPayload;
+    if (p?.kind === "metadata") {
+      runSearch("", {
+        seedArtist: p.artist,
+        seedTrack: p.track,
+        append: true,
+        skipBreadcrumbPush: true,
+        useBackendFilters: false,
+        limitMultiplier: 2,
+        exclude: getDiscoverExcludeKeys()
+      });
+    } else {
+      const url = p?.kind === "url" ? p.url : state.lastQueryUrl || dom.urlInput.value.trim();
+      runSearch(url, {
+        append: true,
+        skipBreadcrumbPush: true,
+        useBackendFilters: false,
+        limitMultiplier: 2,
+        exclude: getDiscoverExcludeKeys()
+      });
+    }
+  });
   dom.results.addEventListener("click", onResultsClick);
   dom.quickFilters.addEventListener("click", (event) => {
     const chip = event.target.closest("[data-tag]");
@@ -1714,7 +1771,15 @@
     if (!Number.isInteger(idx) || idx < 0 || idx >= state.breadcrumbs.length) return;
     const crumb = state.breadcrumbs[idx];
     state.breadcrumbs = state.breadcrumbs.slice(0, idx + 1);
-    runSearch(crumb.url, { skipBreadcrumbPush: true });
+    if (crumb.meta && crumb.meta.artist && crumb.meta.track) {
+      runSearch("", {
+        seedArtist: crumb.meta.artist,
+        seedTrack: crumb.meta.track,
+        skipBreadcrumbPush: true
+      });
+    } else {
+      runSearch(crumb.url || dom.urlInput.value.trim(), { skipBreadcrumbPush: true });
+    }
   });
   dom.drillCloseBtn.addEventListener("click", () => {
     state.breadcrumbs = [];

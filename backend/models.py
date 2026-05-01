@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class TrackRequest(BaseModel):
@@ -72,7 +72,20 @@ class SimilarityFilters(BaseModel):
 
 
 class UnifiedSimilarRequest(BaseModel):
-    url: str = Field(description="Spotify track URL or URI")
+    url: str = Field(
+        default="",
+        description="Spotify track URL or URI (optional if seed_artist and seed_track are set)",
+    )
+    seed_artist: str | None = Field(
+        default=None,
+        max_length=220,
+        description="Primary artist for metadata-only seed (with seed_track) when url is empty",
+    )
+    seed_track: str | None = Field(
+        default=None,
+        max_length=320,
+        description="Track title for metadata-only seed (with seed_artist) when url is empty",
+    )
     limit: int = Field(default=20, ge=1, le=250, description="Number of similar tracks to return")
     weights: AudioWeights = Field(default_factory=AudioWeights)
     exclude: list[str] = Field(
@@ -92,6 +105,27 @@ class UnifiedSimilarRequest(BaseModel):
         description="If true, rank audio similarity with valence/danceability zeroed and blend toward audio scores.",
     )
     filters: SimilarityFilters = Field(default_factory=SimilarityFilters)
+
+    @model_validator(mode="after")
+    def url_or_metadata_seed(self) -> "UnifiedSimilarRequest":
+        u = (self.url or "").strip()
+        a = (self.seed_artist or "").strip() if self.seed_artist else ""
+        t = (self.seed_track or "").strip() if self.seed_track else ""
+        if u:
+            self.url = u
+            self.seed_artist = None
+            self.seed_track = None
+            return self
+        if a and t:
+            self.url = ""
+            self.seed_artist = a
+            self.seed_track = t
+            return self
+        raise ValueError("Provide a Spotify url or both seed_artist and seed_track")
+
+    def resolved_spotify_url(self) -> str:
+        """Non-empty Spotify URL for audio sub-requests, or empty when using metadata-only seed."""
+        return (self.url or "").strip()
 
 
 class TrackInfo(BaseModel):
