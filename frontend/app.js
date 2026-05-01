@@ -37,9 +37,7 @@
     miniplayerArtist: byId("miniplayer-artist"),
     miniplayerToggle: byId("miniplayer-toggle"),
     miniplayerStatus: byId("miniplayer-status"),
-    addQueueBtn: byId("add-queue-btn"),
-    actionStatus: byId("action-status"),
-    actionsBar: byId("actions-bar"),
+    appStatus: byId("app-status"),
     boardPanel: byId("memory-board-panel"),
     boardCount: byId("memory-board-count"),
     boardList: byId("memory-board-list"),
@@ -105,7 +103,7 @@
     if (state.fallbackNowPlaying) {
       dom.miniplayerTitle.textContent = state.fallbackNowPlaying.name || "—";
       dom.miniplayerArtist.textContent = (state.fallbackNowPlaying.artists || []).join(", ");
-      dom.miniplayerToggle.textContent = state.fallbackAudio?.paused ? "▶" : "❚❚";
+      dom.miniplayerToggle.textContent = state.fallbackAudio?.paused === true ? "▶" : "❚❚";
       syncMiniplayerVisibility();
       return;
     }
@@ -115,7 +113,8 @@
       dom.miniplayerTitle.textContent = track.name || "—";
       const artists = Array.isArray(track.artists) ? track.artists.map((a) => a.name).filter(Boolean) : [];
       dom.miniplayerArtist.textContent = artists.join(", ");
-      dom.miniplayerToggle.textContent = playback.paused ? "▶" : "❚❚";
+      const isPaused = playback.paused === true;
+      dom.miniplayerToggle.textContent = isPaused ? "▶" : "❚❚";
     } else {
       dom.miniplayerTitle.textContent = "—";
       dom.miniplayerArtist.textContent = "";
@@ -158,6 +157,8 @@
       stopFallbackPlayback();
       setMiniplayerStatus("Preview could not be played.");
     });
+    audio.addEventListener("play", () => renderMiniplayerFromState());
+    audio.addEventListener("pause", () => renderMiniplayerFromState());
     renderMiniplayerFromState();
     try {
       await audio.play();
@@ -225,13 +226,17 @@
         state.webPlayer = player;
         player.addListener("ready", ({ device_id: deviceId }) => {
           state.webPlayerDeviceId = deviceId;
-          setMiniplayerStatus("In-browser player ready — Play uses this device; + Queue targets it when open.");
+          setMiniplayerStatus("In-browser player ready — Play uses this device; per-track + Queue targets it when open.");
           renderMiniplayerFromState();
         });
         player.addListener("not_ready", ({ device_id: deviceId }) => {
           if (state.webPlayerDeviceId === deviceId) state.webPlayerDeviceId = null;
         });
         player.addListener("player_state_changed", (playbackState) => {
+          if (playbackState == null) {
+            if (Date.now() < state.webPlayerIgnoreNullUntil) return;
+            return;
+          }
           state.playerPlaybackState = playbackState;
           renderMiniplayerFromState();
         });
@@ -286,6 +291,7 @@
           const data = await response.json().catch(() => ({}));
           if (response.ok) {
             stopFallbackPlayback();
+            state.webPlayerIgnoreNullUntil = Date.now() + 2500;
             state.playerPlaybackState = {
               paused: false,
               track_window: {
@@ -295,8 +301,14 @@
                 }
               }
             };
+            if (state.webPlayer && typeof state.webPlayer.getCurrentState === "function") {
+              try {
+                const cur = await state.webPlayer.getCurrentState();
+                if (cur) state.playerPlaybackState = cur;
+              } catch (_) {}
+            }
             renderMiniplayerFromState();
-            dom.actionStatus.textContent = "Playing in Spotify web player.";
+            if (dom.appStatus) dom.appStatus.textContent = "Playing in Spotify web player.";
             return;
           }
           setMiniplayerStatus(extractErrorMessage(data));
@@ -304,16 +316,16 @@
       }
     }
     if (await playFallbackPreview(track)) {
-      dom.actionStatus.textContent = "Playing fallback preview.";
+      if (dom.appStatus) dom.appStatus.textContent = "Playing fallback preview.";
       return;
     }
     const openUrl = getFallbackOpenUrl(track);
     if (openUrl) {
       window.open(openUrl, "_blank", "noopener,noreferrer");
-      dom.actionStatus.textContent = "Opened track in external player.";
+      if (dom.appStatus) dom.appStatus.textContent = "Opened track in external player.";
       return;
     }
-    dom.actionStatus.textContent = "No playable source available for this track.";
+    if (dom.appStatus) dom.appStatus.textContent = "No playable source available for this track.";
   }
 
   const CORE_ADVANCED_EXCLUDES = new Set([
@@ -333,6 +345,8 @@
     spotifyLastStatus: null,
     webPlayer: null,
     webPlayerDeviceId: null,
+    /** Ignore transient null player_state_changed right after starting playback via REST. */
+    webPlayerIgnoreNullUntil: 0,
     playerPlaybackState: null,
     fallbackAudio: null,
     fallbackNowPlaying: null,
@@ -379,11 +393,6 @@
       if (first && typeof first === "object" && first.message) return String(first.message);
     }
     return "Request failed";
-  }
-
-  function applyQueueControlsEnabled() {
-    const on = state.spotifyConnected;
-    if (dom.addQueueBtn) dom.addQueueBtn.disabled = !on;
   }
 
   function esc(value) {
@@ -743,7 +752,6 @@
 
   function renderResults() {
     const tracks = filteredTracks();
-    dom.actionsBar.classList.toggle("hidden", tracks.length === 0);
     dom.results.innerHTML = tracks.length > 0
       ? tracks.map((track, index) => {
         const artists = (track.artists || []).join(", ");
@@ -1022,7 +1030,6 @@
       dom.spotifyUser.textContent = "";
       await teardownWebPlayer();
     }
-    applyQueueControlsEnabled();
   }
 
   async function handleOAuthReturnThenStatus() {
@@ -1045,7 +1052,9 @@
     }
     if (connectedFlag === "1") {
       if (state.spotifyConnected) {
-        dom.actionStatus.textContent = `Spotify connected${dom.spotifyUser.textContent ? ` as ${dom.spotifyUser.textContent}` : ""}. Use Play (in-browser), + Queue, or playlists.`;
+        if (dom.appStatus) {
+          dom.appStatus.textContent = `Spotify connected${dom.spotifyUser.textContent ? ` as ${dom.spotifyUser.textContent}` : ""}. Use Play on each track or the Memory Board / QList.`;
+        }
         clearError();
       } else {
         setError(spotifyOAuthVerifyErrorMessage());
@@ -1113,6 +1122,7 @@
   async function runSearch(queryUrl, options = {}) {
     if (!queryUrl) return;
     clearError();
+    if (dom.appStatus && !options.append) dom.appStatus.textContent = "";
     dom.loading.classList.remove("hidden");
     try {
       const data = await fetchUnified(queryUrl, options);
@@ -1143,14 +1153,14 @@
       renderBreadcrumbs();
       renderActiveFilterCount();
       renderResults();
-      if (options.append) {
+      if (options.append && dom.appStatus) {
         const visible = filteredTracks().length;
         if (incoming.length > 0 && visible === 0) {
-          dom.actionStatus.textContent = "Loaded more tracks, but current filters hide them all. Relax filters or Reset to reveal new matches.";
+          dom.appStatus.textContent = "Loaded more tracks, but current filters hide them all. Relax filters or Reset to reveal new matches.";
         } else if (incoming.length === 0) {
-          dom.actionStatus.textContent = "No additional tracks were found for this seed.";
+          dom.appStatus.textContent = "No additional tracks were found for this seed.";
         } else {
-          dom.actionStatus.textContent = `Loaded ${incoming.length} more candidate tracks.`;
+          dom.appStatus.textContent = `Loaded ${incoming.length} more candidate tracks.`;
         }
       }
     } catch (error) {
@@ -1165,7 +1175,7 @@
     const setStatus = (msg) => {
       if (quiet) return;
       if (statusTarget === "board") dom.boardStatus.textContent = msg;
-      else dom.actionStatus.textContent = msg;
+      else dom.qboardStatus.textContent = msg;
     };
     const pending = [];
     const seen = new Set();
@@ -1183,6 +1193,7 @@
 
     const maxPerRequest = 120;
     let anyRateLimited = false;
+    let mbNoLinkSum = 0;
     for (let offset = 0; offset < pending.length; offset += maxPerRequest) {
       const chunk = pending.slice(offset, offset + maxPerRequest);
       const useMbFirst = typeof options.useMusicbrainzFirst === "boolean"
@@ -1209,6 +1220,9 @@
       if (data.meta && data.meta.rate_limited) {
         anyRateLimited = true;
       }
+      if (useMbFirst && data.meta && typeof data.meta.mb_no_spotify_link === "number") {
+        mbNoLinkSum += data.meta.mb_no_spotify_link;
+      }
       const results = Array.isArray(data.results) ? data.results : [];
       results.forEach((entry) => {
         if (!entry || !entry.key || !entry.spotify_uri) return;
@@ -1220,22 +1234,10 @@
       setStatus("Spotify is throttling requests — try again in a few minutes.");
       return { rateLimited: true, failed: false };
     }
+    if (!quiet && statusTarget !== "board" && mbNoLinkSum > 0) {
+      dom.qboardStatus.textContent = `3rd party had no Spotify link for ${mbNoLinkSum} track(s); Spotify search was used (may rate-limit).`;
+    }
     return { rateLimited: false, failed: false };
-  }
-
-  async function resolveUrisBatch(tracks, options = {}) {
-    const items = [];
-    const seen = new Set();
-    tracks.forEach((track) => {
-      const key = trackLookupKey(track);
-      if (!key || seen.has(key)) return;
-      const artist = ((track.artists || [])[0] || "").trim();
-      const title = (track.name || "").trim();
-      if (!artist || !title) return;
-      seen.add(key);
-      items.push({ key, artist, title });
-    });
-    return resolveUriItemsBatch(items, options);
   }
 
   async function resolveTrackUri(track, batchOptions = {}) {
@@ -1259,7 +1261,7 @@
 
   async function queueTrack(track) {
     if (!state.spotifyConnected) {
-      dom.actionStatus.textContent = "Connect Spotify first, then use + Queue (uses your account).";
+      dom.qboardStatus.textContent = "Connect Spotify first to queue a track.";
       return;
     }
     const { uri, rateLimited, failed } = await resolveTrackUri(track);
@@ -1277,8 +1279,7 @@
       markQueueFailure(key, "Spotify is throttling queue access.");
       renderQboard();
       renderResults();
-      dom.actionStatus.textContent =
-        "Spotify Q could not be accessed! Temporary QList updated.";
+      dom.qboardStatus.textContent = "Spotify is throttling. See ! on affected tracks and QList.";
       return;
     }
     if (!uri) {
@@ -1292,9 +1293,7 @@
       markQueueFailure(key, failed ? "Could not reach Spotify mapping." : "Could not map this track to Spotify.");
       renderQboard();
       renderResults();
-      dom.actionStatus.textContent = failed
-        ? "Spotify Q could not be accessed! Temporary QList updated."
-        : "Could not map this track to Spotify; QList updated.";
+      dom.qboardStatus.textContent = "Could not resolve Spotify URI. See ! on this track.";
       return;
     }
     try {
@@ -1309,8 +1308,8 @@
       renderQboard();
       clearQueueFailure(key);
       renderResults();
-      dom.actionStatus.textContent = usedWebPlayerFallback
-        ? "Added to queue (fallback: Cat ID web player device)."
+      dom.qboardStatus.textContent = usedWebPlayerFallback
+        ? "Added to queue (web player device)."
         : (data.message || "Added to queue.");
     } catch (error) {
       upsertQboardItem({
@@ -1323,113 +1322,7 @@
       markQueueFailure(key, error.message || "Queue failed.");
       renderQboard();
       renderResults();
-      dom.actionStatus.textContent = "Spotify Q could not be accessed! Temporary QList updated.";
-    }
-  }
-
-  async function queueVisible() {
-    if (!state.spotifyConnected) {
-      dom.actionStatus.textContent = "Connect Spotify first, then Add to Queue (uses your account).";
-      return;
-    }
-    const tracks = filteredTracks();
-    const resolveResult = await resolveUrisBatch(tracks, { statusTarget: "action" });
-    if (resolveResult.failed) {
-      tracks.forEach((track) => {
-        const key = trackLookupKey(track);
-        upsertQboardItem({
-          key,
-          artist: ((track.artists || [])[0] || "").trim(),
-          title: (track.name || "").trim(),
-          reason: "Spotify URI resolution failed before queueing."
-        });
-        markQueueFailure(key, "Spotify URI resolution failed before queueing.");
-      });
-      renderQboard();
-      renderResults();
-      dom.actionStatus.textContent = "Spotify Q could not be accessed! Temporary QList updated.";
-      return;
-    }
-    const uris = tracks.map((track) => knownTrackUri(track)).filter(Boolean);
-    if (resolveResult.rateLimited && !uris.length) {
-      tracks.forEach((track) => {
-        const key = trackLookupKey(track);
-        upsertQboardItem({
-          key,
-          artist: ((track.artists || [])[0] || "").trim(),
-          title: (track.name || "").trim(),
-          reason: "Spotify is throttling URI resolution."
-        });
-        markQueueFailure(key, "Spotify is throttling URI resolution.");
-      });
-      renderQboard();
-      renderResults();
-      dom.actionStatus.textContent = "Spotify Q could not be accessed! Temporary QList updated.";
-      return;
-    }
-    const unresolvedCount = tracks.length - uris.length;
-    tracks.forEach((track) => {
-      const key = trackLookupKey(track);
-      if (!knownTrackUri(track)) {
-        upsertQboardItem({
-          key,
-          artist: ((track.artists || [])[0] || "").trim(),
-          title: (track.name || "").trim(),
-          reason: "Track URI unresolved during queue."
-        });
-        markQueueFailure(key, "Track URI unresolved during queue.");
-      }
-    });
-    if (!uris.length) {
-      renderQboard();
-      renderResults();
-      dom.actionStatus.textContent = "No mappable tracks in current view.";
-      return;
-    }
-    try {
-      const { data, usedWebPlayerFallback } = await postQueueWithFallback(uris);
-      tracks.forEach((track) => {
-        const key = trackLookupKey(track);
-        const resolvedUri = knownTrackUri(track);
-        if (resolvedUri) {
-          queueTrackIntoQlist(
-            track,
-            usedWebPlayerFallback
-              ? "Queued to Spotify via Cat ID fallback device."
-              : "Queued to Spotify device queue.",
-            resolvedUri
-          );
-          clearQueueFailure(key);
-        }
-      });
-      let msg = unresolvedCount > 0
-        ? `Queued ${uris.length} track(s), ${unresolvedCount} could not be mapped to Spotify URIs.`
-        : (data.message || `Queued ${uris.length} track(s).`);
-      if (resolveResult.rateLimited) {
-        msg = `${msg} (Spotify was throttling during resolve — try again later for the rest.)`;
-      }
-      if (usedWebPlayerFallback) {
-        msg = `${msg} (fallback target: Cat ID web player device)`;
-      }
-      renderQboard();
-      renderResults();
-      dom.actionStatus.textContent = msg;
-    } catch (error) {
-      tracks.forEach((track) => {
-        const key = trackLookupKey(track);
-        const uri = knownTrackUri(track);
-        upsertQboardItem({
-          key,
-          artist: ((track.artists || [])[0] || "").trim(),
-          title: (track.name || "").trim(),
-          spotifyUri: uri,
-          reason: error.message || "Queue failed."
-        });
-        markQueueFailure(key, error.message || "Queue failed.");
-      });
-      renderQboard();
-      renderResults();
-      dom.actionStatus.textContent = "Spotify Q could not be accessed! Temporary QList updated.";
+      dom.qboardStatus.textContent = "Queue failed. See ! on this track.";
     }
   }
 
@@ -1718,7 +1611,7 @@
   dom.logoutBtn.addEventListener("click", async () => {
     await teardownWebPlayer();
     await fetch("/api/spotify/logout", { method: "POST", ...FETCH_SAME_ORIGIN });
-    dom.actionStatus.textContent = "Disconnected from Spotify.";
+    if (dom.appStatus) dom.appStatus.textContent = "Disconnected from Spotify.";
     await checkSpotify();
   });
   dom.miniplayerToggle?.addEventListener("click", () => {
@@ -1736,8 +1629,6 @@
       state.webPlayer.togglePlay();
     }
   });
-  dom.addQueueBtn.addEventListener("click", queueVisible);
-
   dom.boardAddVisibleBtn.addEventListener("click", () => {
     addBoardItems(filteredTracks().map(toBoardItem));
     dom.boardStatus.textContent = "Added visible tracks to Memory Board.";

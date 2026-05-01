@@ -622,9 +622,40 @@ body.miniplayer-visible {
   color: var(--text-secondary);
 }
 
-.filter-panel .filter-sub-label input[type="checkbox"] {
-  margin-right: 0.35rem;
-  vertical-align: middle;
+.filter-panel .filter-check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.filter-panel .filter-check-row.filter-sub-label {
+  margin-top: 0.5rem;
+}
+
+.filter-panel .toggle-row.filter-check-row {
+  flex-wrap: wrap;
+  gap: 0.65rem 1.25rem;
+  margin-top: 0.35rem;
+}
+
+.filter-panel .filter-check-row input[type="checkbox"] {
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+}
+
+.filter-panel label.filter-check-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
+.filter-panel label.filter-check-label input[type="checkbox"] {
+  margin-top: 0.15rem;
+  flex-shrink: 0;
 }
 
 .bpm-row input[type="number"]#bpm-min,
@@ -955,13 +986,11 @@ body.miniplayer-visible {
   opacity: 1;
 }
 
-/* ---- Actions Bar (playlist / queue) ---- */
-.actions-bar {
-  margin-top: 1rem;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
+.app-status {
+  min-height: 1.2rem;
+  margin-top: 0.35rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
 }
 
 .action-btn {

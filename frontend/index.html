@@ -44,6 +44,7 @@
             </select>
           </div>
         </form>
+        <div id="app-status" class="app-status" aria-live="polite"></div>
         <div id="loading" class="loading hidden" aria-live="polite">
           <div class="spinner"></div>
           <span>Searching for similar tracks&hellip;</span>
@@ -96,12 +97,6 @@
           <div id="drill-profile" class="drill-profile"></div>
         </div>
 
-        <div id="actions-bar" class="actions-bar hidden">
-          <button id="save-playlist-btn" class="action-btn" title="Save filtered results as a Spotify playlist">Save as Playlist</button>
-          <button id="add-queue-btn" class="action-btn" title="Add filtered results to your Spotify queue">Add to Queue</button>
-          <span id="action-status" class="action-status" aria-live="polite"></span>
-        </div>
-
         <div id="results" class="results"></div>
         <button id="discover-more-btn" class="discover-more-btn hidden">Discover More</button>
       </section>
@@ -143,15 +138,15 @@
 
             <div class="filter-group">
               <label>Vocal / Instrumental</label>
-              <div class="toggle-row">
-                <label><input type="checkbox" id="filter-instrumental-only" /> Instrumental only</label>
-                <label><input type="checkbox" id="filter-vocal-only" /> Vocal only</label>
+              <div class="toggle-row filter-check-row">
+                <label class="filter-check-label" title="Show only tracks tagged or scored as instrumental (filters the list)."><input type="checkbox" id="filter-instrumental-only" /> Instrumental only</label>
+                <label class="filter-check-label" title="Show only tracks tagged or scored as vocal (filters the list)."><input type="checkbox" id="filter-vocal-only" /> Vocal only</label>
               </div>
-              <label class="filter-sub-label"><input type="checkbox" id="filter-instrumental-similarity-only" /> Instrumental similarity (de-emphasize valence / danceability in ranking)</label>
+              <label class="filter-check-row filter-sub-label" title="For the next similar search, rank using instrumental-friendly audio weights (does not replace Instrumental only)."><input type="checkbox" id="filter-instrumental-similarity-only" /> Instrumental similarity only</label>
             </div>
 
             <div class="filter-group">
-              <label><input type="checkbox" id="resolve-uri-mb-first" /> Resolve Spotify URIs via MusicBrainz first (slower, fewer Spotify searches)</label>
+              <label class="filter-check-row" title="Try MusicBrainz for a Spotify track id before calling Spotify search (still falls back to Spotify when MB has no link)."><input type="checkbox" id="resolve-uri-mb-first" /> Resolve Spotify URIs via 3rd Party</label>
             </div>
 
             <div id="tag-filter" class="filter-group hidden">

@@ -1253,6 +1253,7 @@ async def spotify_resolve_uris(req: ResolveUrisRequest, request: Request):
     stopped_rate_limited = False
     chunk_size = 25
     mb_resolved = 0
+    mb_miss = 0
     spotify_search_resolved = 0
     mb_errors = 0
     http_client: httpx.AsyncClient | None = _get_http_client() if req.use_musicbrainz_first else None
@@ -1267,6 +1268,7 @@ async def spotify_resolve_uris(req: ResolveUrisRequest, request: Request):
 
         if req.use_musicbrainz_first and http_client is not None:
             mb_id: str | None = None
+            mb_lookup_ok = False
             try:
                 mb_id = await fetch_musicbrainz_spotify_relation_id(
                     http_client,
@@ -1274,6 +1276,7 @@ async def spotify_resolve_uris(req: ResolveUrisRequest, request: Request):
                     item.title,
                     None,
                 )
+                mb_lookup_ok = True
             except Exception:
                 mb_errors += 1
                 mb_id = None
@@ -1282,6 +1285,8 @@ async def spotify_resolve_uris(req: ResolveUrisRequest, request: Request):
             if _valid_spotify_track_id(mb_id):
                 uri = f"spotify:track:{mb_id}"
                 mb_resolved += 1
+            elif mb_lookup_ok:
+                mb_miss += 1
 
         if uri is None:
             uri, rate_limited = await asyncio.to_thread(
@@ -1310,6 +1315,7 @@ async def spotify_resolve_uris(req: ResolveUrisRequest, request: Request):
     }
     if req.use_musicbrainz_first:
         meta["resolved_via_mb"] = mb_resolved
+        meta["mb_no_spotify_link"] = mb_miss
         meta["resolved_via_spotify_search"] = spotify_search_resolved
         meta["mb_errors"] = mb_errors
     return {"results": results, "meta": meta}
