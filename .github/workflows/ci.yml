@@ -1,0 +1,144 @@
+# Build amd64 image on PRs; on main also push to the registry and update the tracked pin.
+# Server deploys are intentional via the separate Deploy workflow (Phase 2) — not this file.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build image
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: cat-id:build
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    name: Build, push, and pin
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Registry credentials live here (Phase 1). Deploy SSH secrets join this Environment in Phase 2.
+    environment: production
+    permissions:
+      contents: write
+    env:
+      REGISTRY_HOST: ${{ vars.REGISTRY_HOST || 'rg.fr-par.scw.cloud' }}
+      REGISTRY_NAMESPACE: ${{ vars.REGISTRY_NAMESPACE || 'cat-id' }}
+      REGISTRY_IMAGE: ${{ vars.REGISTRY_IMAGE || 'app' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Pin commit must be able to push back to main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Require registry credentials
+        env:
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${REGISTRY_USERNAME}" || -z "${REGISTRY_PASSWORD}" ]]; then
+            echo "Missing REGISTRY_USERNAME or REGISTRY_PASSWORD on the production Environment." >&2
+            echo "Add them under Settings → Environments → production (see docs/ci_cd_migration_plan.md §5)." >&2
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_HOST }}/${{ env.REGISTRY_NAMESPACE }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Resolve tags
+        id: meta
+        run: |
+          set -euo pipefail
+          short_sha="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          image_repo="${REGISTRY_HOST}/${REGISTRY_NAMESPACE}/${REGISTRY_IMAGE}"
+          echo "short_sha=${short_sha}" >> "${GITHUB_OUTPUT}"
+          echo "image_repo=${image_repo}" >> "${GITHUB_OUTPUT}"
+          echo "tag_sha=${image_repo}:sha-${short_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tag_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Write image pin
+        id: pin
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_REPO: ${{ steps.meta.outputs.image_repo }}
+          SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DIGEST}" ]]; then
+            echo "Build did not produce a digest output." >&2
+            exit 1
+          fi
+          # docker/build-push-action digest looks like sha256:…
+          pin="${IMAGE_REPO}@${DIGEST}"
+          pin_file="infrastructure/deploy/image.env"
+          mkdir -p "$(dirname "${pin_file}")"
+          {
+            echo "# Non-secret image pin for production Compose."
+            echo "# Updated by CI on merges to main. Applied to the server only when you run Deploy (Phase 2)."
+            echo "CAT_ID_IMAGE=${pin}"
+          } > "${pin_file}"
+          echo "Pinned ${pin}"
+          echo "pin=${pin}" >> "${GITHUB_OUTPUT}"
+          echo "short_sha=${SHORT_SHA}" >> "${GITHUB_OUTPUT}"
+
+      - name: Commit pin if changed
+        env:
+          SHORT_SHA: ${{ steps.pin.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          pin_file="infrastructure/deploy/image.env"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${pin_file}"
+          if git diff --staged --quiet; then
+            echo "Pin already up to date; no commit."
+            exit 0
+          fi
+          # [skip ci] prevents a rebuild loop from the pin commit push.
+          git commit -m "chore(deploy): pin image sha-${SHORT_SHA} [skip ci]"
+          git push origin HEAD:main
