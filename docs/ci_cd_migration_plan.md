@@ -241,8 +241,10 @@ Registry login on the **server** remains whatever LAED cloud-init already config
 1. Add `.github/workflows/deploy.yml` with `name: Deploy`. ✅
 2. Add short `docs/ci_cd_runbook.md`: “To ship: merge to main → Actions → **Deploy** → Run workflow.” ✅
 3. Add `scripts/ci_deploy_remote.sh` remote entrypoint. ✅
-4. Dry-run: Run **Deploy** with current pin (recreate + verify/smoke green).
+4. Dry-run: Run **Deploy** with current pin (recreate + verify/smoke green). ✅ ([run 38131612236](https://github.com/FelineWeise/cat-id/actions/runs/38131612236))
 5. Update `docs/deploy_scaleway.md` + deploy README: primary path = CI + Deploy; Mac script = fallback. ✅
+6. Dedicated passphrase-less deploy SSH key in `DEPLOY_SSH_KEY` (personal Keychain key cannot auth from Actions). ✅
+7. `EXPECTED_IPV4` = public DNS A (`51.15.228.49`); `DEPLOY_HOST` = SSH endpoint (`51.15.207.5`) — scan host keys for `DEPLOY_HOST` only. ✅
 
 ### Phase 3 — Harden + template for other repos
 
