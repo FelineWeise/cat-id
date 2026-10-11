@@ -34,6 +34,7 @@ Afterward, reconcile `infrastructure/deploy/image.env` on `main` so the next Dep
 ## Preconditions (once)
 
 - GitHub Environment **`production`** has portable `REGISTRY_*` (CI) and `DEPLOY_*` (Deploy) vars/secrets.
+- `DEPLOY_SSH_KEY` must be a **passphrase-less** key authorized on the deploy user (macOS Keychain-backed personal keys will fail in Actions).
 - Server `/opt/cat-id/production.env` exists and is **not** managed by CI.
 - Prefer `CAT_ID_IMAGE` only in `image.env` (not in `production.env`).
 - Host can `docker pull` from the registry (LAED docker auth / root config).
