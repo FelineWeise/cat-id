@@ -24,6 +24,8 @@ node_modules/
 # Any *.env except templates ending in .env.example
 *.env
 !*.env.example
+# Tracked non-secret image pin for CI/CD (Approach 2 hybrid)
+!infrastructure/deploy/image.env
 
 # Local / tool caches
 .cache

@@ -149,6 +149,12 @@ class TrackInfo(BaseModel):
     analysis_metrics: dict[str, float | str | bool | None] = Field(default_factory=dict)
 
 
+class PlaylistSeedSummary(BaseModel):
+    name: str
+    artists: list[str] = Field(default_factory=list)
+    spotify_id: str | None = None
+
+
 class SimilarTracksResponse(BaseModel):
     seed_track: TrackInfo
     similar_tracks: list[TrackInfo]
@@ -186,6 +192,14 @@ class SimilarTracksResponse(BaseModel):
     approximated: bool = Field(
         default=False,
         description="True when audio features were estimated from tags instead of Spotify's API",
+    )
+    playlist_id: str | None = Field(
+        default=None,
+        description="Playlist id when input was a playlist URL/URI.",
+    )
+    playlist_sampled_seeds: list[PlaylistSeedSummary] = Field(
+        default_factory=list,
+        description="Tracks sampled from playlist for multi-seed similarity.",
     )
 
 

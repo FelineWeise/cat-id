@@ -2,6 +2,8 @@
 
 cat-id **does not** provision its own VPC, VM, or flexible IP in this repository. The **LAED** stack owns the server, volume, cloud-init, and (usually) Docker auth for Scaleway Container Registry. This repo owns **DNS** ([`infrastructure/dns/`](../infrastructure/dns/)), **production manifests** ([`infrastructure/deploy/`](../infrastructure/deploy/)), and **optional** registry namespace Terraform ([`infrastructure/registry/`](../infrastructure/registry/)).
 
+**CI/CD (Phase 1):** merges to `main` build and push the image and update [`infrastructure/deploy/image.env`](../infrastructure/deploy/image.env) via GitHub Actions (**CI** workflow). Applying the pin on the server remains manual until the **Deploy** workflow (Phase 2). Plan: [`ci_cd_migration_plan.md`](./ci_cd_migration_plan.md). The Mac push script below stays as a fallback.
+
 **Separation on one shared VM:** use a dedicated **registry namespace** or image path, a **Docker bridge network** (`cat-id-net`), and a **data directory** (e.g. `/opt/cat-id`) distinct from LAED’s paths—not a second VPC on the same OS without another NIC/VM.
 
 ## 0) Preconditions
@@ -88,14 +90,13 @@ Pin immutable **tags or digests** for production; avoid relying on `:latest`.
 ## 4) Runtime on the LAED host
 
 1. SSH to the LAED base server (`terraform output` from the **LAED** repo for IP/SSH).
-2. Place [`infrastructure/deploy/`](../infrastructure/deploy/) files on disk, e.g. **`/opt/cat-id`**: `docker-compose.yml`, `Caddyfile`, and **`production.env`** (from `production.env.example`).
+2. Place [`infrastructure/deploy/`](../infrastructure/deploy/) files on disk, e.g. **`/opt/cat-id`**: `docker-compose.yml`, `image.env`, `Caddyfile`, and **`production.env`** (from `production.env.example`).
 3. Reuse **`/root/.docker/config.json`** from LAED bootstrap for `docker compose pull` when running as root, or `docker login` to `rg.<region>.scw.cloud` once.
 4. From that directory:
 
 ```bash
-export CAT_ID_IMAGE=rg.fr-par.scw.cloud/cat-id/app:v1.0.0
-docker compose pull
-docker compose up -d
+docker compose --env-file image.env --env-file production.env pull
+docker compose --env-file image.env --env-file production.env up -d
 ```
 
 **TLS / Caddy:** By default the deploy compose runs **only the app** on host port **`18008`**. **LAED’s** Caddy runs in Docker — use **`host.docker.internal:18008`** (and `extra_hosts` on LAED’s `caddy` service). See [`infrastructure/deploy/README.md`](../infrastructure/deploy/README.md). Use **`docker compose --profile standalone-tls up -d`** only when **80/443** are free on that host. Images must be **linux/amd64** (`./scripts/push_to_scaleway_registry.sh`).

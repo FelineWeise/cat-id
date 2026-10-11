@@ -2,6 +2,15 @@
 
 This folder is the **runtime contract** for cat-id on the **LAED base VM**: Compose + Caddy use **only `image:`** references to **Scaleway Container Registry**—no `build:` for the app.
 
+## Image pin (`image.env`)
+
+| File | Tracked? | Contains |
+|------|----------|----------|
+| [`image.env`](./image.env) | Yes | `CAT_ID_IMAGE=…` only (prefer `@sha256:…` digests) |
+| `production.env` | No (server only) | Spotify/Last.fm and other runtime secrets |
+
+CI on `main` builds/pushes the image and updates `image.env`. Applying that pin on the server is intentional via the **Deploy** workflow (Phase 2); until then, copy the pin and run compose manually (see below). Full plan: [`../../docs/ci_cd_migration_plan.md`](../../docs/ci_cd_migration_plan.md).
+
 ## Ownership
 
 | Layer | Owner |
@@ -20,19 +29,16 @@ This folder is the **runtime contract** for cat-id on the **LAED base VM**: Comp
    sudo chown "$USER:$USER" /opt/cat-id
    ```
 
-2. Copy **`docker-compose.yml`**, **`Caddyfile`**, and create **`production.env`** from **`production.env.example`**.
+2. Copy **`docker-compose.yml`**, **`image.env`**, and **`Caddyfile`**, and create **`production.env`** from **`production.env.example`**.
 
-3. Set **`CAT_ID_IMAGE`** to your pushed image, e.g. `rg.fr-par.scw.cloud/cat-id/app:v1.0.0` (namespace `cat-id`, repository `app`; pin immutable tags or digests in production, do not rely on `:latest`).
+3. Keep **`CAT_ID_IMAGE`** in **`image.env`** (CI updates this file on `main`). Prefer digests, e.g. `rg.fr-par.scw.cloud/cat-id/app@sha256:…`. Do not rely on `:latest`.
 
 4. From that directory:
 
    ```bash
-   export CAT_ID_IMAGE=rg.fr-par.scw.cloud/cat-id/app:v1.0.0
-   docker compose pull
-   docker compose up -d
+   docker compose --env-file image.env --env-file production.env pull
+   docker compose --env-file image.env --env-file production.env up -d
    ```
-
-   If you put **`CAT_ID_IMAGE`** in **`production.env`** instead, Compose only sees it when you pass that file: `docker compose --env-file production.env pull && docker compose --env-file production.env up -d`.
 
    **Default layout (LAED shares the host):** only the **app** container runs on host port **`18008`**. LAED’s Caddy runs **inside Docker**, so it must **not** use `127.0.0.1` on the host (that is unreachable from other containers). Use **`host.docker.internal`** after wiring it on the **LAED** `caddy` service:
 
