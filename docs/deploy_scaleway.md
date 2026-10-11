@@ -2,7 +2,7 @@
 
 cat-id **does not** provision its own VPC, VM, or flexible IP in this repository. The **LAED** stack owns the server, volume, cloud-init, and (usually) Docker auth for Scaleway Container Registry. This repo owns **DNS** ([`infrastructure/dns/`](../infrastructure/dns/)), **production manifests** ([`infrastructure/deploy/`](../infrastructure/deploy/)), and **optional** registry namespace Terraform ([`infrastructure/registry/`](../infrastructure/registry/)).
 
-**CI/CD (Phase 1):** merges to `main` build and push the image and update [`infrastructure/deploy/image.env`](../infrastructure/deploy/image.env) via GitHub Actions (**CI** workflow). Applying the pin on the server remains manual until the **Deploy** workflow (Phase 2). Plan: [`ci_cd_migration_plan.md`](./ci_cd_migration_plan.md). The Mac push script below stays as a fallback.
+**CI/CD:** merges to `main` build/push and update [`infrastructure/deploy/image.env`](../infrastructure/deploy/image.env) (**CI** workflow). Ship to the server with Actions → **Deploy** → **Run workflow**. Operator runbook: [`ci_cd_runbook.md`](./ci_cd_runbook.md). Plan: [`ci_cd_migration_plan.md`](./ci_cd_migration_plan.md). The Mac push script below stays as a fallback.
 
 **Separation on one shared VM:** use a dedicated **registry namespace** or image path, a **Docker bridge network** (`cat-id-net`), and a **data directory** (e.g. `/opt/cat-id`) distinct from LAED’s paths—not a second VPC on the same OS without another NIC/VM.
 
@@ -95,8 +95,8 @@ Pin immutable **tags or digests** for production; avoid relying on `:latest`.
 4. From that directory:
 
 ```bash
-docker compose --env-file image.env --env-file production.env pull
-docker compose --env-file image.env --env-file production.env up -d
+docker compose --env-file production.env --env-file image.env pull
+docker compose --env-file production.env --env-file image.env up -d
 ```
 
 **TLS / Caddy:** By default the deploy compose runs **only the app** on host port **`18008`**. **LAED’s** Caddy runs in Docker — use **`host.docker.internal:18008`** (and `extra_hosts` on LAED’s `caddy` service). See [`infrastructure/deploy/README.md`](../infrastructure/deploy/README.md). Use **`docker compose --profile standalone-tls up -d`** only when **80/443** are free on that host. Images must be **linux/amd64** (`./scripts/push_to_scaleway_registry.sh`).

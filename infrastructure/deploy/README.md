@@ -9,7 +9,7 @@ This folder is the **runtime contract** for cat-id on the **LAED base VM**: Comp
 | [`image.env`](./image.env) | Yes | `CAT_ID_IMAGE=…` only (prefer `@sha256:…` digests) |
 | `production.env` | No (server only) | Spotify/Last.fm and other runtime secrets |
 
-CI on `main` builds/pushes the image and updates `image.env`. Applying that pin on the server is intentional via the **Deploy** workflow (Phase 2); until then, copy the pin and run compose manually (see below). Full plan: [`../../docs/ci_cd_migration_plan.md`](../../docs/ci_cd_migration_plan.md).
+CI on `main` builds/pushes the image and updates `image.env`. Applying that pin on the server is intentional via GitHub Actions → **Deploy** → **Run workflow**. Operator steps: [`../../docs/ci_cd_runbook.md`](../../docs/ci_cd_runbook.md). Full plan: [`../../docs/ci_cd_migration_plan.md`](../../docs/ci_cd_migration_plan.md).
 
 ## Ownership
 
@@ -36,8 +36,8 @@ CI on `main` builds/pushes the image and updates `image.env`. Applying that pin 
 4. From that directory:
 
    ```bash
-   docker compose --env-file image.env --env-file production.env pull
-   docker compose --env-file image.env --env-file production.env up -d
+   docker compose --env-file production.env --env-file image.env pull
+   docker compose --env-file production.env --env-file image.env up -d
    ```
 
    **Default layout (LAED shares the host):** only the **app** container runs on host port **`18008`**. LAED’s Caddy runs **inside Docker**, so it must **not** use `127.0.0.1` on the host (that is unreachable from other containers). Use **`host.docker.internal`** after wiring it on the **LAED** `caddy` service:

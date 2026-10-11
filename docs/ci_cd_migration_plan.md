@@ -197,12 +197,12 @@ Alternative if pin-commits feel noisy: upload digest as a workflow artifact and 
    - `infrastructure/deploy/image.env` → `$DEPLOY_PATH/image.env`
    - Optional: `Caddyfile` only if standalone-tls profile is in use (default shared-LAED layout: skip)
    - **Never** overwrite `$DEPLOY_PATH/production.env` from CI
-5. Remote:
+5. Remote (`scripts/ci_deploy_remote.sh`):
 
    ```bash
    cd "$DEPLOY_PATH"
-   docker compose --env-file image.env --env-file production.env pull cat-id
-   docker compose --env-file image.env --env-file production.env up -d --force-recreate cat-id
+   docker compose --env-file production.env --env-file image.env pull cat-id
+   docker compose --env-file production.env --env-file image.env up -d --force-recreate cat-id
    ```
 
 6. From the runner (public HTTPS):  
@@ -238,11 +238,11 @@ Registry login on the **server** remains whatever LAED cloud-init already config
 
 ### Phase 2 — Deploy workflow
 
-1. Add `.github/workflows/deploy.yml` with `name: Deploy`.
-2. Add short `docs/ci_cd_runbook.md`: “To ship: merge to main → Actions → **Deploy** → Run workflow.”
-3. Dry-run: Run **Deploy** with current pin (should recreate same digest, verify green).
-4. Real ship: merge a tiny change → wait for CI pin → Run **Deploy** → confirm new digest live via verify/smoke.
-5. Update `docs/deploy_scaleway.md` + deploy README: primary path = CI + Deploy; Mac script = fallback.
+1. Add `.github/workflows/deploy.yml` with `name: Deploy`. ✅
+2. Add short `docs/ci_cd_runbook.md`: “To ship: merge to main → Actions → **Deploy** → Run workflow.” ✅
+3. Add `scripts/ci_deploy_remote.sh` remote entrypoint. ✅
+4. Dry-run: Run **Deploy** with current pin (recreate + verify/smoke green).
+5. Update `docs/deploy_scaleway.md` + deploy README: primary path = CI + Deploy; Mac script = fallback. ✅
 
 ### Phase 3 — Harden + template for other repos
 
@@ -316,7 +316,7 @@ Pattern to copy: **CI builds/pins → Deploy applies over SSH → portable secre
 1. **Pin commit vs artifact-only:** default = commit `image.env` (audit/rollback). Switch to artifact-only if pin commits are too noisy.
 2. **Deploy user:** keep `feline` for pilot vs create `deploy` user with limited sudo/docker — prefer dedicated user before laed reuse.
 3. **Smoke in Deploy:** default on; allow input `run_smoke=false` for infra-only recreates.
-4. **Compose env-file order:** `--env-file image.env --env-file production.env` so secrets win on key clashes; ensure `CAT_ID_IMAGE` is only in `image.env`.
+4. **Compose env-file order:** `--env-file production.env --env-file image.env` so the tracked pin always wins for `CAT_ID_IMAGE`; keep secrets only in `production.env`.
 
 ---
 
