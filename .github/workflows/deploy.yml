@@ -1,0 +1,158 @@
+# Apply the tracked (or overridden) image pin to the production host.
+# Operator UX: Actions → Deploy → Run workflow. (GitHub event: workflow_dispatch.)
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: Git ref whose compose + image.env to apply
+        required: true
+        default: main
+        type: string
+      image_ref:
+        description: Optional CAT_ID_IMAGE override (digest or tag). Leave empty to use image.env from git_ref.
+        required: false
+        default: ""
+        type: string
+      run_smoke:
+        description: Run scripts/smoke_test.sh after verify
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Apply pin to production
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/cat-id' }}
+      APP_BASE_URL: ${{ vars.APP_BASE_URL || 'https://app.cat-id.eu' }}
+      APP_HOST: ${{ vars.APP_HOST || 'app.cat-id.eu' }}
+      EXPECTED_IPV4: ${{ vars.EXPECTED_IPV4 }}
+    steps:
+      - name: Require deploy configuration
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH DEPLOY_SSH_KEY; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing ${name} on the production Environment." >&2
+              missing=1
+            fi
+          done
+          if [[ "${missing}" -ne 0 ]]; then
+            echo "See docs/ci_cd_migration_plan.md §5 and docs/ci_cd_runbook.md." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref }}
+
+      - name: Resolve image pin
+        id: pin
+        env:
+          IMAGE_REF_INPUT: ${{ inputs.image_ref }}
+        run: |
+          set -euo pipefail
+          pin_file="infrastructure/deploy/image.env"
+          if [[ -n "${IMAGE_REF_INPUT}" ]]; then
+            {
+              echo "# Non-secret image pin for production Compose."
+              echo "# Overridden for this Deploy run via image_ref input."
+              echo "CAT_ID_IMAGE=${IMAGE_REF_INPUT}"
+            } > "${pin_file}"
+            echo "Using image_ref input override."
+          elif [[ ! -f "${pin_file}" ]]; then
+            echo "Missing ${pin_file} and no image_ref override." >&2
+            exit 1
+          fi
+          pin="$(grep -E '^CAT_ID_IMAGE=' "${pin_file}" | tail -1 | cut -d= -f2-)"
+          if [[ -z "${pin}" ]]; then
+            echo "Could not resolve CAT_ID_IMAGE." >&2
+            exit 1
+          fi
+          echo "pin=${pin}" >> "${GITHUB_OUTPUT}"
+          echo "Deploying ${pin}"
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${DEPLOY_SSH_KEY}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Prefer scanning the configured host; fall back to EXPECTED_IPV4 when set.
+          scan_target="${DEPLOY_HOST}"
+          if [[ -n "${EXPECTED_IPV4}" ]]; then
+            scan_target="${EXPECTED_IPV4}"
+          fi
+          ssh-keyscan -H "${scan_target}" >> ~/.ssh/known_hosts 2>/dev/null
+          {
+            echo "Host deploy-target"
+            echo "  HostName ${DEPLOY_HOST}"
+            echo "  User ${DEPLOY_USER}"
+            echo "  IdentityFile ~/.ssh/deploy_key"
+            echo "  IdentitiesOnly yes"
+            echo "  StrictHostKeyChecking yes"
+          } > ~/.ssh/config
+          chmod 600 ~/.ssh/config ~/.ssh/known_hosts
+
+      - name: Sync runtime manifests
+        run: |
+          set -euo pipefail
+          # Never sync production.env (secrets stay on the server).
+          ssh deploy-target "mkdir -p '${DEPLOY_PATH}/scripts'"
+          scp infrastructure/deploy/docker-compose.yml "deploy-target:${DEPLOY_PATH}/docker-compose.yml"
+          scp infrastructure/deploy/image.env "deploy-target:${DEPLOY_PATH}/image.env"
+          scp scripts/ci_deploy_remote.sh "deploy-target:${DEPLOY_PATH}/scripts/ci_deploy_remote.sh"
+          ssh deploy-target "chmod +x '${DEPLOY_PATH}/scripts/ci_deploy_remote.sh'"
+
+      - name: Pull and recreate
+        run: |
+          set -euo pipefail
+          ssh deploy-target "cd '${DEPLOY_PATH}' && bash scripts/ci_deploy_remote.sh"
+
+      - name: Verify deployment
+        run: |
+          set -euo pipefail
+          export BASE_URL="${APP_BASE_URL}"
+          export APP_HOST="${APP_HOST}"
+          if [[ -n "${EXPECTED_IPV4}" ]]; then
+            export EXPECTED_IPV4
+          fi
+          # Give the container a moment after recreate before health checks.
+          sleep 8
+          ./scripts/verify_cat_id_deployment.sh
+
+      - name: Smoke test
+        if: ${{ inputs.run_smoke }}
+        run: |
+          set -euo pipefail
+          export BASE_URL="${APP_BASE_URL}"
+          ./scripts/smoke_test.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Deploy" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Ref: \`${{ inputs.git_ref }}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Image: \`${{ steps.pin.outputs.pin }}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Host path: \`${{ env.DEPLOY_PATH }}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Smoke: \`${{ inputs.run_smoke }}\`" >> "${GITHUB_STEP_SUMMARY}"
