@@ -89,45 +89,39 @@ jobs:
           echo "pin=${pin}" >> "${GITHUB_OUTPUT}"
           echo "Deploying ${pin}"
 
-      - name: Configure SSH
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Trust deploy host key
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          printf '%s\n' "${DEPLOY_SSH_KEY}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          # Prefer scanning the configured host; fall back to EXPECTED_IPV4 when set.
           scan_target="${DEPLOY_HOST}"
           if [[ -n "${EXPECTED_IPV4}" ]]; then
             scan_target="${EXPECTED_IPV4}"
           fi
           ssh-keyscan -H "${scan_target}" >> ~/.ssh/known_hosts 2>/dev/null
-          {
-            echo "Host deploy-target"
-            echo "  HostName ${DEPLOY_HOST}"
-            echo "  User ${DEPLOY_USER}"
-            echo "  IdentityFile ~/.ssh/deploy_key"
-            echo "  IdentitiesOnly yes"
-            echo "  StrictHostKeyChecking yes"
-          } > ~/.ssh/config
-          chmod 600 ~/.ssh/config ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
       - name: Sync runtime manifests
         run: |
           set -euo pipefail
           # Never sync production.env (secrets stay on the server).
-          ssh deploy-target "mkdir -p '${DEPLOY_PATH}/scripts'"
-          scp infrastructure/deploy/docker-compose.yml "deploy-target:${DEPLOY_PATH}/docker-compose.yml"
-          scp infrastructure/deploy/image.env "deploy-target:${DEPLOY_PATH}/image.env"
-          scp scripts/ci_deploy_remote.sh "deploy-target:${DEPLOY_PATH}/scripts/ci_deploy_remote.sh"
-          ssh deploy-target "chmod +x '${DEPLOY_PATH}/scripts/ci_deploy_remote.sh'"
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh "${target}" "mkdir -p '${DEPLOY_PATH}/scripts'"
+          scp infrastructure/deploy/docker-compose.yml "${target}:${DEPLOY_PATH}/docker-compose.yml"
+          scp infrastructure/deploy/image.env "${target}:${DEPLOY_PATH}/image.env"
+          scp scripts/ci_deploy_remote.sh "${target}:${DEPLOY_PATH}/scripts/ci_deploy_remote.sh"
+          ssh "${target}" "chmod +x '${DEPLOY_PATH}/scripts/ci_deploy_remote.sh'"
 
       - name: Pull and recreate
         run: |
           set -euo pipefail
-          ssh deploy-target "cd '${DEPLOY_PATH}' && bash scripts/ci_deploy_remote.sh"
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh "${target}" "cd '${DEPLOY_PATH}' && bash scripts/ci_deploy_remote.sh"
 
       - name: Verify deployment
         run: |
