@@ -428,6 +428,28 @@ body.miniplayer-visible {
   color: var(--text-secondary);
 }
 
+.drill-trace-title {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.35rem;
+}
+
+.drill-trace-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.trace-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--surface2);
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  background: var(--surface2);
+  color: var(--text-secondary);
+}
+
 /* ---- Form ---- */
 .input-row {
   display: flex;
@@ -580,7 +602,7 @@ body.miniplayer-visible {
 
 /* ---- Filter Panel ---- */
 .filter-panel {
-  margin-top: 1.25rem;
+  margin-top: 0;
   background: var(--surface);
   border-radius: var(--radius);
   padding: 0.75rem 1rem;
@@ -909,6 +931,17 @@ body.miniplayer-visible {
   white-space: nowrap;
 }
 
+.bpm-badge-btn {
+  border: 1px solid var(--surface2);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.bpm-badge-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* ---- Track Actions ---- */
 .track-actions {
   flex-shrink: 0;
@@ -1017,6 +1050,13 @@ body.miniplayer-visible {
 .action-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.icon-action-btn {
+  min-width: 2.1rem;
+  padding: 0.45rem 0.55rem;
+  justify-content: center;
+  font-size: 0.95rem;
 }
 
 .action-status {

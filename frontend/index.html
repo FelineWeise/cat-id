@@ -11,7 +11,7 @@
     <header class="app-header">
       <div>
         <h1>Follow Your Cat ID</h1>
-        <p class="subtitle">Track a Spotify track. Find your next Cat ID.</p>
+        <p class="subtitle">track spotify your way</p>
       </div>
       <div id="spotify-auth" class="spotify-auth">
         <button id="spotify-login-btn" class="spotify-login-btn">Connect Spotify</button>
@@ -27,7 +27,7 @@
             <input
               type="text"
               id="track-url"
-              placeholder="https://open.spotify.com/track/..."
+              placeholder="https://open.spotify.com/track/... or /playlist/..."
               required
             />
             <button type="submit" id="search-btn">Find Similar</button>
@@ -44,65 +44,7 @@
             </select>
           </div>
         </form>
-        <div id="app-status" class="app-status" aria-live="polite"></div>
-        <div id="loading" class="loading hidden" aria-live="polite">
-          <div class="spinner"></div>
-          <span>Searching for similar tracks&hellip;</span>
-        </div>
-
-        <div id="audio-weights" class="audio-weights hidden">
-          <label class="weights-heading">Similarity Weights <span class="hint">(dimensions above 30% become recommendation targets)</span></label>
-          <div class="weight-sliders">
-            <div class="weight-row" data-key="tempo">
-              <label>Tempo / BPM</label>
-              <input type="range" min="0" max="100" value="50" />
-              <span class="weight-val">50%</span>
-            </div>
-            <div class="weight-row" data-key="energy">
-              <label>Energy</label>
-              <input type="range" min="0" max="100" value="50" />
-              <span class="weight-val">50%</span>
-            </div>
-            <div class="weight-row" data-key="valence">
-              <label>Mood / Valence</label>
-              <input type="range" min="0" max="100" value="50" />
-              <span class="weight-val">50%</span>
-            </div>
-            <div class="weight-row" data-key="danceability">
-              <label>Danceability</label>
-              <input type="range" min="0" max="100" value="50" />
-              <span class="weight-val">50%</span>
-            </div>
-            <div class="weight-row" data-key="acousticness">
-              <label>Acousticness</label>
-              <input type="range" min="0" max="100" value="50" />
-              <span class="weight-val">50%</span>
-            </div>
-            <div class="weight-row" data-key="instrumentalness">
-              <label>Instrumentalness</label>
-              <input type="range" min="0" max="100" value="50" />
-              <span class="weight-val">50%</span>
-            </div>
-          </div>
-        </div>
-
-        <div id="seed-track" class="seed-track hidden"></div>
-
-        <div id="drill-panel" class="drill-panel hidden">
-          <div class="drill-panel-header">
-            <h3>Drill Trace</h3>
-            <button type="button" id="drill-close-btn" class="drill-close-btn">Close</button>
-          </div>
-          <div id="drill-breadcrumbs" class="drill-breadcrumbs"></div>
-          <div id="drill-profile" class="drill-profile"></div>
-        </div>
-
-        <div id="results" class="results"></div>
-        <button id="discover-more-btn" class="discover-more-btn hidden">Discover More</button>
-      </section>
-
-      <aside class="sidebar-column">
-        <section id="filter-panel" class="filter-panel hidden surface-card">
+        <section id="filter-panel" class="filter-panel surface-card">
           <details open>
             <summary>Filters <span id="active-filter-count" class="hint"></span></summary>
 
@@ -163,7 +105,64 @@
             <button id="reset-filters-btn" class="action-btn" type="button">Reset filters</button>
           </details>
         </section>
+        <div id="app-status" class="app-status" aria-live="polite"></div>
+        <div id="loading" class="loading hidden" aria-live="polite">
+          <div class="spinner"></div>
+          <span>Searching for similar tracks&hellip;</span>
+        </div>
 
+        <div id="audio-weights" class="audio-weights hidden">
+          <label class="weights-heading">Similarity Weights <span class="hint">(dimensions above 30% become recommendation targets)</span></label>
+          <div class="weight-sliders">
+            <div class="weight-row" data-key="tempo">
+              <label>Tempo / BPM</label>
+              <input type="range" min="0" max="100" value="50" />
+              <span class="weight-val">50%</span>
+            </div>
+            <div class="weight-row" data-key="energy">
+              <label>Energy</label>
+              <input type="range" min="0" max="100" value="50" />
+              <span class="weight-val">50%</span>
+            </div>
+            <div class="weight-row" data-key="valence">
+              <label>Mood / Valence</label>
+              <input type="range" min="0" max="100" value="50" />
+              <span class="weight-val">50%</span>
+            </div>
+            <div class="weight-row" data-key="danceability">
+              <label>Danceability</label>
+              <input type="range" min="0" max="100" value="50" />
+              <span class="weight-val">50%</span>
+            </div>
+            <div class="weight-row" data-key="acousticness">
+              <label>Acousticness</label>
+              <input type="range" min="0" max="100" value="50" />
+              <span class="weight-val">50%</span>
+            </div>
+            <div class="weight-row" data-key="instrumentalness">
+              <label>Instrumentalness</label>
+              <input type="range" min="0" max="100" value="50" />
+              <span class="weight-val">50%</span>
+            </div>
+          </div>
+        </div>
+
+        <div id="seed-track" class="seed-track hidden"></div>
+
+        <div id="drill-panel" class="drill-panel hidden">
+          <div class="drill-panel-header">
+            <h3>Drill Trace</h3>
+            <button type="button" id="drill-close-btn" class="drill-close-btn">Close</button>
+          </div>
+          <div id="drill-breadcrumbs" class="drill-breadcrumbs"></div>
+          <div id="drill-profile" class="drill-profile"></div>
+        </div>
+
+        <div id="results" class="results"></div>
+        <button id="discover-more-btn" class="discover-more-btn hidden">Discover More</button>
+      </section>
+
+      <aside class="sidebar-column">
         <div class="boards-grid">
           <section id="memory-board-panel" class="surface-card hidden" aria-live="polite">
             <div class="section-head">

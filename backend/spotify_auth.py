@@ -23,7 +23,7 @@ from backend.config import (
 logger = logging.getLogger(__name__)
 
 SCOPES = (
-    "playlist-modify-public playlist-modify-private playlist-read-private "
+    "playlist-modify-public playlist-modify-private playlist-read-private playlist-read-collaborative "
     "user-modify-playback-state user-read-playback-state user-read-private "
     "streaming"
 )
