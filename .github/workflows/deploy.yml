@@ -99,11 +99,9 @@ jobs:
           set -euo pipefail
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          scan_target="${DEPLOY_HOST}"
-          if [[ -n "${EXPECTED_IPV4}" ]]; then
-            scan_target="${EXPECTED_IPV4}"
-          fi
-          ssh-keyscan -H "${scan_target}" >> ~/.ssh/known_hosts 2>/dev/null
+          # Scan the SSH target only. EXPECTED_IPV4 is for public DNS verify and may differ
+          # from DEPLOY_HOST (e.g. flexible IP vs SSH endpoint).
+          ssh-keyscan -H "${DEPLOY_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
           chmod 600 ~/.ssh/known_hosts
 
       - name: Sync runtime manifests
